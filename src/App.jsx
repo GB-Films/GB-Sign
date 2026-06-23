@@ -7,7 +7,7 @@ import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   CheckCircle2, ClipboardCopy, Download, FileSignature, FolderPlus,
-  LockKeyhole, LogOut, PenLine, ShieldCheck, Upload, Users
+  LockKeyhole, LogOut, PenLine, Settings, ShieldCheck, Upload, Users
 } from 'lucide-react';
 import { auth, db, provider, storage } from './firebase';
 import { Badge, Button, Card, Empty, Field } from './components.jsx';
@@ -190,11 +190,21 @@ function CreateProject({ onCreated }) {
 function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin }) {
   const isOwner = project.ownerUid === user.uid;
   const canManageMembers = isAdmin || isOwner;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   return <section className="project">
-    <div className="sectionTitle"><h2>{project.name}</h2><Badge>{project.client || 'Proyecto interno'}</Badge></div>
-    <section className="grid two">
+    <div className="sectionTitle projectTitle">
+      <div><h2>{project.name}</h2><Badge>{project.client || 'Proyecto interno'}</Badge></div>
+      <Button variant="ghost" type="button" onClick={() => setSettingsOpen((v) => !v)}><Settings size={16}/> Configuración</Button>
+    </div>
+
+    {settingsOpen && <Card className="settingsCard">
+      <div className="cardHead"><h3>Configuración del proyecto</h3><Users size={22}/></div>
+      <Members project={project} currentUser={user} canManage={canManageMembers}/>
+    </Card>}
+
+    <section className="grid one">
       <Card><div className="cardHead"><h3>Cargar documento y solicitar firmas</h3><Upload size={22}/></div><UploadDocument project={project}/></Card>
-      <Card><div className="cardHead"><h3>Colaboradores internos</h3><Users size={22}/></div><Members project={project} currentUser={user} canManage={canManageMembers}/></Card>
     </section>
     <Card><h3>Documentos del proyecto</h3><div className="table">
       <div className="tr th"><span>Documento</span><span>Firmantes externos</span><span>Estado</span><span>Acciones</span></div>
@@ -438,45 +448,64 @@ function SignatureFieldDesigner({ fileUrl, fileName, contentType, signerEmails, 
   const [activeEmail, setActiveEmail] = useState(signerEmails[0] || '');
   const [page, setPage] = useState(1);
   const [draft, setDraft] = useState(null);
-  const wrapRef = useRef(null);
+  const overlayRef = useRef(null);
+  const drawingRef = useRef(null);
 
   useEffect(() => {
     if (!signerEmails.includes(activeEmail)) setActiveEmail(signerEmails[0] || '');
   }, [signerEmails, activeEmail]);
 
   function point(ev) {
-    const rect = wrapRef.current.getBoundingClientRect();
+    const rect = overlayRef.current.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
     const y = Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height));
     return { x, y };
   }
 
   function start(ev) {
-    if (!activeEmail) return;
+    if (!activeEmail || !overlayRef.current) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    overlayRef.current.setPointerCapture?.(ev.pointerId);
     const p = point(ev);
-    setDraft({ sx: p.x, sy: p.y, x: p.x, y: p.y, w: 0, h: 0 });
+    const next = { sx: p.x, sy: p.y, x: p.x, y: p.y, w: 0, h: 0 };
+    drawingRef.current = next;
+    setDraft(next);
   }
 
   function move(ev) {
-    if (!draft) return;
+    if (!drawingRef.current || !overlayRef.current) return;
+    ev.preventDefault();
     const p = point(ev);
-    setDraft({ ...draft, x: Math.min(draft.sx, p.x), y: Math.min(draft.sy, p.y), w: Math.abs(p.x - draft.sx), h: Math.abs(p.y - draft.sy) });
+    const base = drawingRef.current;
+    const next = {
+      ...base,
+      x: Math.min(base.sx, p.x),
+      y: Math.min(base.sy, p.y),
+      w: Math.abs(p.x - base.sx),
+      h: Math.abs(p.y - base.sy),
+    };
+    drawingRef.current = next;
+    setDraft(next);
   }
 
-  function end() {
-    if (!draft) return;
-    if (draft.w < 0.03 || draft.h < 0.025) { setDraft(null); return; }
+  function end(ev) {
+    if (!drawingRef.current) return;
+    ev?.preventDefault?.();
+    const finalDraft = draft || drawingRef.current;
+    drawingRef.current = null;
+    setDraft(null);
+    if (!finalDraft || finalDraft.w < 0.025 || finalDraft.h < 0.018) return;
     const clean = normalizeEmail(activeEmail);
     const nextField = {
       id: `field_${emailKey(clean)}`,
       signerEmail: clean,
       label: `Firma de ${clean}`,
       page: Number(page) || 1,
-      x: round(draft.x), y: round(draft.y), w: round(draft.w), h: round(draft.h),
+      x: round(finalDraft.x), y: round(finalDraft.y), w: round(finalDraft.w), h: round(finalDraft.h),
       createdAtClient: new Date().toISOString(),
     };
     onChange([...(fields || []).filter((f) => normalizeEmail(f.signerEmail) !== clean), nextField]);
-    setDraft(null);
   }
 
   function remove(email) {
@@ -488,11 +517,21 @@ function SignatureFieldDesigner({ fileUrl, fileName, contentType, signerEmails, 
     <div className="designerToolbar">
       <Field label="Firmante"><select value={activeEmail} onChange={(e)=>setActiveEmail(e.target.value)}>{signerEmails.map((e)=><option value={e} key={e}>{e}</option>)}</select></Field>
       <Field label="Página"><input type="number" min="1" value={page} onChange={(e)=>setPage(e.target.value)}/></Field>
-      <div className="designerHint">Dibujá un recuadro sobre la zona donde debe aparecer la firma. Se guarda como coordenadas relativas del documento.</div>
+      <div className="designerHint"><strong>Cómo marcar el campo:</strong><br/>Elegí el firmante y arrastrá sobre la vista previa del documento. El recuadro queda asociado solo a ese mail.</div>
     </div>
-    <div className="docPreview designer" ref={wrapRef} onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}>
+    <div className="docPreview designer">
       <PreviewSurface url={fileUrl} fileName={fileName} contentType={contentType} page={page}/>
-      <SignatureOverlay fields={fields || []} activeFieldId={`field_${emailKey(activeEmail)}`} draft={draft} />
+      <SignatureOverlay
+        fields={fields || []}
+        activeFieldId={`field_${emailKey(activeEmail)}`}
+        draft={draft}
+        designer
+        overlayRef={overlayRef}
+        onPointerDown={start}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerCancel={end}
+      />
     </div>
     <div className="fieldStatus">
       {signerEmails.map((email) => {
@@ -518,11 +557,22 @@ function PreviewSurface({ url, fileName, contentType, page = 1 }) {
   return <div className="previewFallback"><strong>{fileName}</strong><p>La vista previa completa depende del navegador. Abrí el documento original para revisar el contenido antes de firmar.</p></div>;
 }
 
-function SignatureOverlay({ fields, activeFieldId, onSelectField, draft, signatures = [] }) {
-  return <div className="signatureOverlay">
-    {(fields || []).map((f) => <button type="button" key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)} onClick={(e) => { e.preventDefault(); onSelectField?.(f.id); }}>
-      <span>{f.label || f.signerEmail}</span>
-    </button>)}
+function SignatureOverlay({ fields, activeFieldId, onSelectField, draft, signatures = [], designer = false, overlayRef, onPointerDown, onPointerMove, onPointerUp, onPointerCancel }) {
+  return <div
+    ref={overlayRef}
+    className={`signatureOverlay ${designer ? 'designerOverlay' : ''}`}
+    onPointerDown={onPointerDown}
+    onPointerMove={onPointerMove}
+    onPointerUp={onPointerUp}
+    onPointerCancel={onPointerCancel}
+    onPointerLeave={onPointerUp}
+  >
+    {(fields || []).map((f) => designer
+      ? <div key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)}><span>{f.label || f.signerEmail}</span></div>
+      : <button type="button" key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)} onClick={(e) => { e.preventDefault(); onSelectField?.(f.id); }}>
+        <span>{f.label || f.signerEmail}</span>
+      </button>
+    )}
     {signatures.map((sig) => <div key={sig.field.id} className="signatureVisual" style={rectStyle(sig.field)}>{sig.type === 'drawn' ? <img src={sig.image} alt="Firma"/> : <span>{sig.typedName}</span>}</div>)}
     {draft && <div className="signatureRect draft" style={rectStyle(draft)}><span>Nuevo campo</span></div>}
   </div>;

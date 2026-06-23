@@ -75,7 +75,7 @@ El UID aparece dentro de la app cuando el usuario entra sin permisos internos.
 
 ### Colaborador interno
 
-Se agrega desde el panel **Colaboradores internos** dentro de un proyecto.
+Se agrega desde **Configuración** dentro de un proyecto, en la sección **Colaboradores internos**.
 
 Puede:
 
@@ -141,7 +141,7 @@ A partir de ahí vas a poder crear proyectos.
 
 - Login con Google mediante Firebase Authentication.
 - Carpetas de proyectos.
-- Colaboradores internos por email de Google.
+- Colaboradores internos por email de Google, dentro del panel **Configuración** del proyecto.
 - Carga de documentos en Firebase Storage.
 - Solicitud de firma a firmantes externos por mail de Google.
 - Panel de documentos asignados para cada firmante.
@@ -156,7 +156,7 @@ A partir de ahí vas a poder crear proyectos.
 
 ## Firma visual y formalidad
 
-La firma no se guarda como un botón genérico. El administrador debe asignar un campo de firma para cada firmante. Cada campo queda registrado con:
+La firma no se guarda como un botón genérico. El administrador debe asignar un campo de firma para cada firmante. Para marcarlo, elegí el firmante y arrastrá sobre la vista previa del documento; la app coloca una capa transparente por encima del PDF/imagen para que el recuadro se pueda dibujar sin que el visor del navegador capture el mouse. Cada campo queda registrado con:
 
 - Email del firmante.
 - Página declarada.
