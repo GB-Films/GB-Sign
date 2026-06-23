@@ -9,11 +9,12 @@ import {
   CheckCircle2, ClipboardCopy, Download, FileSignature, FolderPlus,
   LockKeyhole, LogOut, PenLine, Settings, ShieldCheck, Upload, Users
 } from 'lucide-react';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { auth, db, provider, storage } from './firebase';
 import { Badge, Button, Card, Empty, Field } from './components.jsx';
 import {
-  downloadText, emailKey, fmtDate, normalizeEmail, parseEmails,
-  sha256File, signatureRequestId, statusFor
+  downloadBytes, downloadText, emailKey, fmtDate, normalizeEmail, parseEmails,
+  sha256Bytes, sha256File, signatureRequestId, statusFor
 } from './utils.js';
 
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
@@ -313,31 +314,311 @@ function Members({ project, currentUser, canManage }) {
 function DocumentRow({ project, docu, signatures }) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState('');
   const [editFields, setEditFields] = useState(false);
   const tone = statusFor(docu, signatures) === 'Completo' ? 'good' : 'warn';
+  const isPdf = (docu.contentType || '').includes('pdf') || /\.pdf$/i.test(docu.fileName || '');
+
   async function openFile() {
     const u = await getDownloadURL(ref(storage, docu.storagePath));
     setUrl(u); window.open(u, '_blank', 'noopener,noreferrer');
   }
+
   function evidence() {
     const payload = {
       certificateType: 'GB Sign electronic signature evidence',
       generatedAt: new Date().toISOString(),
+      generatedBy: normalizeEmail(auth.currentUser?.email || ''),
+      project,
       document: docu,
       signatures,
     };
-    downloadText(`evidencia-${docu.title}.json`, JSON.stringify(payload, null, 2), 'application/json');
+    downloadText(`evidencia-${safeFileName(docu.title)}.json`, JSON.stringify(payload, null, 2), 'application/json');
   }
+
+  async function downloadSignedPdf() {
+    if (!isPdf) { alert('La descarga de PDF firmado por ahora está disponible para documentos PDF.'); return; }
+    if (!signatures.length) { alert('Todavía no hay firmas para estampar en el PDF.'); return; }
+    setPdfBusy('signed');
+    try {
+      const bytes = await buildSignedPdf({ project, docu, signatures });
+      downloadBytes(`${safeFileName(docu.title)}-firmado-gb-sign.pdf`, bytes, 'application/pdf');
+    } catch (err) {
+      console.error(err);
+      alert(`No se pudo generar el PDF firmado: ${err.message || err}`);
+    } finally {
+      setPdfBusy('');
+    }
+  }
+
+  async function downloadCertificatePdf() {
+    if (!signatures.length) { alert('Todavía no hay firmas para certificar.'); return; }
+    setPdfBusy('certificate');
+    try {
+      const bytes = await buildEvidenceCertificatePdf({ project, docu, signatures });
+      downloadBytes(`${safeFileName(docu.title)}-certificado-evidencia-gb-sign.pdf`, bytes, 'application/pdf');
+    } catch (err) {
+      console.error(err);
+      alert(`No se pudo generar el certificado: ${err.message || err}`);
+    } finally {
+      setPdfBusy('');
+    }
+  }
+
   async function syncRequests() {
     setBusy(true);
     try { await createSignatureRequests(project, docu); }
     finally { setBusy(false); }
   }
+
   return <>
-    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={syncRequests} disabled={busy}>{busy ? 'Activando...' : 'Activar firmantes'}</Button><Button variant="ghost" onClick={evidence}>Evidencia</Button>{url && <a href={url}>link</a>}</span></div>
+    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={syncRequests} disabled={busy}>{busy ? 'Activando...' : 'Activar firmantes'}</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado PDF'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{url && <a href={url}>link</a>}</span></div>
     {editFields && <EditSignatureFields project={project} docu={docu} onClose={() => setEditFields(false)}/>} 
   </>;
 }
+
+function safeFileName(value = 'documento') {
+  return String(value || 'documento')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 90) || 'documento';
+}
+
+function signedAtDate(sig) {
+  return sig?.signedAt?.toDate ? sig.signedAt.toDate() : sig?.signedAt ? new Date(sig.signedAt) : null;
+}
+
+function signedAtText(sig) {
+  const d = signedAtDate(sig);
+  if (!d || Number.isNaN(d.getTime())) return 'Fecha no disponible';
+  return new Intl.DateTimeFormat('es-AR', {
+    dateStyle: 'full', timeStyle: 'long', timeZone: 'America/Argentina/Buenos_Aires'
+  }).format(d) + ' (Argentina)';
+}
+
+function dataUrlToBytes(dataUrl = '') {
+  const base64 = String(dataUrl).split(',')[1] || '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function fitImage(image, maxWidth, maxHeight) {
+  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+  return { width: image.width * scale, height: image.height * scale };
+}
+
+async function fetchDocumentBytes(docu) {
+  const u = await getDownloadURL(ref(storage, docu.storagePath));
+  const response = await fetch(u);
+  if (!response.ok) throw new Error(`Storage respondió ${response.status}`);
+  return response.arrayBuffer();
+}
+
+async function buildSignedPdf({ project, docu, signatures }) {
+  const originalBytes = await fetchDocumentBytes(docu);
+  const originalHash = await sha256Bytes(originalBytes);
+  if (docu.sha256 && originalHash !== docu.sha256) {
+    throw new Error('El hash del archivo descargado no coincide con el hash guardado. No se genera el PDF firmado.');
+  }
+
+  const pdfDoc = await PDFDocument.load(originalBytes, { ignoreEncryption: false });
+  const fonts = await loadPdfFonts(pdfDoc);
+  pdfDoc.setTitle(`${docu.title} - firmado electrónicamente por GB Sign`);
+  pdfDoc.setSubject('PDF con firmas electrónicas visuales y certificado de evidencia generado por GB Sign.');
+  pdfDoc.setKeywords(['GB Sign', 'firma electrónica', 'evidencia', docu.sha256 || '']);
+  pdfDoc.setProducer('GB Sign');
+  pdfDoc.setCreator('GB Sign');
+  pdfDoc.setModificationDate(new Date());
+
+  for (const sig of signatures) {
+    const field = sig.signatureField || (docu.signatureFields || []).find((f) => f.id === sig.fieldId || normalizeEmail(f.signerEmail) === normalizeEmail(sig.email));
+    if (!field) continue;
+    const pageIndex = Math.max(0, Math.min(pdfDoc.getPageCount() - 1, Number(field.page || 1) - 1));
+    const page = pdfDoc.getPage(pageIndex);
+    await drawSignatureStamp(pdfDoc, page, field, sig, fonts);
+  }
+
+  await appendEvidencePages(pdfDoc, { project, docu, signatures, originalHash, fonts, includeLegalNote: true });
+  return pdfDoc.save();
+}
+
+async function buildEvidenceCertificatePdf({ project, docu, signatures }) {
+  const pdfDoc = await PDFDocument.create();
+  const fonts = await loadPdfFonts(pdfDoc);
+  let originalHash = docu.sha256 || '';
+  try {
+    const originalBytes = await fetchDocumentBytes(docu);
+    originalHash = await sha256Bytes(originalBytes);
+  } catch (err) {
+    console.warn('No se pudo recalcular hash del documento para el certificado:', err.message);
+  }
+  pdfDoc.setTitle(`${docu.title} - certificado de evidencia GB Sign`);
+  pdfDoc.setSubject('Certificado de evidencia de firma electrónica generado por GB Sign.');
+  pdfDoc.setKeywords(['GB Sign', 'firma electrónica', 'certificado de evidencia', originalHash || '']);
+  pdfDoc.setProducer('GB Sign');
+  pdfDoc.setCreator('GB Sign');
+  pdfDoc.setCreationDate(new Date());
+  await appendEvidencePages(pdfDoc, { project, docu, signatures, originalHash, fonts, includeLegalNote: true });
+  return pdfDoc.save();
+}
+
+async function loadPdfFonts(pdfDoc) {
+  return {
+    regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
+    bold: await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    italic: await pdfDoc.embedFont(StandardFonts.HelveticaOblique),
+  };
+}
+
+async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
+  const { width, height } = page.getSize();
+  const x = field.x * width;
+  const boxW = Math.max(70, field.w * width);
+  const boxH = Math.max(34, field.h * height);
+  const y = height - (field.y * height) - boxH;
+  const pad = Math.max(3, Math.min(8, boxH * 0.12));
+  const metaH = Math.min(28, Math.max(16, boxH * 0.34));
+
+  page.drawRectangle({ x, y, width: boxW, height: boxH, borderColor: rgb(0.08, 0.08, 0.08), borderWidth: 0.9, color: rgb(1, 1, 1), opacity: 0.92 });
+  page.drawLine({ start: { x: x + pad, y: y + metaH + 1 }, end: { x: x + boxW - pad, y: y + metaH + 1 }, thickness: 0.6, color: rgb(0.1, 0.1, 0.1) });
+
+  const signatureAreaH = Math.max(8, boxH - metaH - pad * 1.5);
+  if (sig.signatureType === 'drawn' && sig.signatureImage) {
+    try {
+      const png = await pdfDoc.embedPng(dataUrlToBytes(sig.signatureImage));
+      const dims = fitImage(png, boxW - pad * 2, signatureAreaH);
+      page.drawImage(png, { x: x + (boxW - dims.width) / 2, y: y + metaH + 4 + Math.max(0, (signatureAreaH - dims.height) / 2), width: dims.width, height: dims.height });
+    } catch (err) {
+      page.drawText(sig.displayName || sig.typedName || sig.email || 'Firma', { x: x + pad, y: y + metaH + signatureAreaH * 0.35, size: Math.min(22, signatureAreaH * 0.55), font: fonts.italic, color: rgb(0.05, 0.05, 0.05), maxWidth: boxW - pad * 2 });
+    }
+  } else {
+    page.drawText(sig.typedName || sig.displayName || sig.email || 'Firma', { x: x + pad, y: y + metaH + signatureAreaH * 0.32, size: Math.min(24, Math.max(10, signatureAreaH * 0.55)), font: fonts.italic, color: rgb(0.05, 0.05, 0.05), maxWidth: boxW - pad * 2 });
+  }
+
+  const line1 = `${sig.displayName || sig.typedName || 'Firmante'} · DNI ${sig.dni || '-'}`;
+  const line2 = `${sig.email || '-'} · ${compactDate(sig)}`;
+  page.drawText(line1.slice(0, 120), { x: x + pad, y: y + metaH - 10, size: Math.min(7.6, Math.max(5.5, metaH * 0.28)), font: fonts.bold, color: rgb(0.08, 0.08, 0.08), maxWidth: boxW - pad * 2 });
+  page.drawText(line2.slice(0, 140), { x: x + pad, y: y + 4, size: Math.min(6.8, Math.max(5, metaH * 0.24)), font: fonts.regular, color: rgb(0.18, 0.18, 0.18), maxWidth: boxW - pad * 2 });
+}
+
+function compactDate(sig) {
+  const d = signedAtDate(sig);
+  if (!d || Number.isNaN(d.getTime())) return 'fecha no disponible';
+  return new Intl.DateTimeFormat('es-AR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Argentina/Buenos_Aires' }).format(d);
+}
+
+async function appendEvidencePages(pdfDoc, { project, docu, signatures, originalHash, fonts, includeLegalNote = true }) {
+  const margin = 42;
+  let page = pdfDoc.addPage([595.28, 841.89]);
+  let y = 792;
+
+  const newPage = () => {
+    page = pdfDoc.addPage([595.28, 841.89]);
+    y = 792;
+  };
+
+  const ensure = (needed = 80) => { if (y < margin + needed) newPage(); };
+  const text = (value, opts = {}) => {
+    const size = opts.size || 10;
+    const font = opts.bold ? fonts.bold : opts.italic ? fonts.italic : fonts.regular;
+    const color = opts.color || rgb(0.08, 0.08, 0.08);
+    const lines = wrapText(String(value ?? ''), opts.maxChars || 92);
+    for (const line of lines) {
+      ensure(size + 6);
+      page.drawText(line, { x: opts.x || margin, y, size, font, color, maxWidth: 510 });
+      y -= size + 5;
+    }
+  };
+  const row = (label, value) => {
+    ensure(28);
+    page.drawText(label, { x: margin, y, size: 9, font: fonts.bold, color: rgb(0.16, 0.16, 0.16), maxWidth: 135 });
+    const lines = wrapText(String(value ?? '-'), 74);
+    for (const line of lines) {
+      page.drawText(line, { x: margin + 145, y, size: 9, font: fonts.regular, color: rgb(0.08, 0.08, 0.08), maxWidth: 365 });
+      y -= 13;
+    }
+    y -= 3;
+  };
+
+  page.drawText('GB Sign', { x: margin, y: 805, size: 16, font: fonts.bold, color: rgb(0.02, 0.02, 0.02) });
+  page.drawText('Certificado de evidencia de firma electrónica', { x: margin, y: 780, size: 20, font: fonts.bold, color: rgb(0.02, 0.02, 0.02) });
+  y = 746;
+
+  text('Este certificado resume la evidencia técnica asociada al documento y a las firmas electrónicas registradas en GB Sign.', { size: 10, maxChars: 88 });
+  y -= 8;
+
+  row('Proyecto', `${project.name || '-'}${project.client ? ` · ${project.client}` : ''}`);
+  row('Documento', `${docu.title || '-'} · ${docu.fileName || '-'}`);
+  row('ID documento', docu.id || '-');
+  row('Hash SHA-256 original', originalHash || docu.sha256 || '-');
+  row('Generado por', normalizeEmail(auth.currentUser?.email || '-') || '-');
+  row('Fecha generación', new Intl.DateTimeFormat('es-AR', { dateStyle: 'full', timeStyle: 'long', timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date()) + ' (Argentina)');
+  row('Cantidad de firmantes', `${signatures.length} firma(s) registradas de ${(docu.signerEmails || []).length} firmante(s) solicitados.`);
+
+  if (includeLegalNote) {
+    y -= 8;
+    text('Nota legal operativa', { size: 12, bold: true, maxChars: 88 });
+    text('GB Sign registra firmas electrónicas con evidencia de autenticación, intención, consentimiento, DNI declarado, hash de integridad del documento y fecha de firma. No reemplaza una firma digital certificada con autoridad certificante, pero busca conservar evidencia suficiente para acreditar autenticidad e integridad si la firma electrónica fuera desconocida.', { size: 9, maxChars: 94 });
+  }
+
+  y -= 10;
+  text('Detalle de firmas', { size: 14, bold: true, maxChars: 88 });
+
+  for (const [index, sig] of signatures.entries()) {
+    ensure(230);
+    page.drawRectangle({ x: margin, y: y - 6, width: 511, height: 1, color: rgb(0.88, 0.88, 0.88) });
+    y -= 24;
+    text(`Firma ${index + 1}: ${sig.displayName || sig.typedName || sig.email || 'Firmante'}`, { size: 12, bold: true, maxChars: 88 });
+    row('Email autenticado', sig.email || '-');
+    row('UID Firebase', sig.uid || '-');
+    row('DNI declarado', sig.dni ? `${sig.dni} (${sig.dniConfirmed ? 'confirmado por el firmante' : 'sin confirmación'})` : '-');
+    row('Fecha y hora', signedAtText(sig));
+    row('Tipo de firma', sig.signatureType === 'drawn' ? 'Firma dibujada con mouse/touch' : 'Firma cursiva generada con nombre');
+    row('Hash firmado', sig.documentSha256 || docu.sha256 || '-');
+    row('Campo visual', sig.fieldId || sig.signatureField?.id || '-');
+    row('User agent', sig.userAgent || '-');
+    row('Acción de intención', sig.intentAction || '-');
+    row('Texto aceptado', sig.acceptedText || ACCEPTANCE_TEXT);
+
+    ensure(82);
+    page.drawText('Representación visual de la firma:', { x: margin, y, size: 9, font: fonts.bold, color: rgb(0.12, 0.12, 0.12) });
+    y -= 68;
+    page.drawRectangle({ x: margin, y, width: 220, height: 56, borderColor: rgb(0.18, 0.18, 0.18), borderWidth: 0.8, color: rgb(1, 1, 1), opacity: 0.95 });
+    if (sig.signatureType === 'drawn' && sig.signatureImage) {
+      try {
+        const png = await pdfDoc.embedPng(dataUrlToBytes(sig.signatureImage));
+        const dims = fitImage(png, 204, 46);
+        page.drawImage(png, { x: margin + 8 + (204 - dims.width) / 2, y: y + 5 + (46 - dims.height) / 2, width: dims.width, height: dims.height });
+      } catch (err) {
+        page.drawText('Firma dibujada registrada', { x: margin + 10, y: y + 23, size: 12, font: fonts.italic });
+      }
+    } else {
+      page.drawText(sig.typedName || sig.displayName || sig.email || 'Firma', { x: margin + 10, y: y + 22, size: 21, font: fonts.italic, color: rgb(0.04, 0.04, 0.04), maxWidth: 200 });
+    }
+    y -= 22;
+  }
+}
+
+function wrapText(value, maxChars = 90) {
+  const words = String(value || '').replace(/\s+/g, ' ').trim().split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    if ((line + ' ' + word).trim().length > maxChars && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = (line + ' ' + word).trim();
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : ['-'];
+}
+
 
 function EditSignatureFields({ project, docu, onClose }) {
   const [fields, setFields] = useState(docu.signatureFields || []);

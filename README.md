@@ -337,3 +337,49 @@ Verificar configuración:
 ```powershell
 gcloud storage buckets describe gs://gb-sign-e1776.firebasestorage.app --format="default(cors_config)"
 ```
+
+## Descarga de PDF firmado y certificado de evidencia
+
+La app incluye dos descargas desde el panel del documento:
+
+- **PDF firmado**: toma el PDF original, estampa las firmas visuales en los recuadros definidos por el administrador y agrega al final páginas de certificado de evidencia.
+- **Certificado PDF**: genera un PDF independiente con el resumen de evidencia de firma electrónica.
+- **JSON**: conserva la evidencia cruda para auditoría o respaldo técnico.
+
+El certificado incluye:
+
+- Proyecto y documento.
+- Archivo original y hash SHA-256.
+- Fecha de generación del certificado.
+- Firmantes registrados.
+- Email autenticado por Google.
+- UID Firebase.
+- DNI declarado y confirmado.
+- Fecha y hora de firma guardada por Firestore.
+- Tipo de firma: dibujada o cursiva generada.
+- Representación visual de la firma.
+- Campo visual firmado.
+- User agent.
+- Texto de consentimiento aceptado.
+
+Esto sigue siendo **firma electrónica con evidencia técnica**, no firma digital certificada por autoridad certificante. El objetivo es conservar el mejor respaldo posible dentro de una app web serverless: identidad autenticada, intención de firma, consentimiento, hash del documento y trazabilidad.
+
+### Dependencia nueva
+
+Se agregó `pdf-lib` para modificar PDFs desde el navegador.
+
+Si actualizás el repo local, corré:
+
+```powershell
+npm install
+```
+
+Luego pusheá también el `package-lock.json` si cambió:
+
+```powershell
+git add package.json package-lock.json
+git commit -m "Add signed PDF and evidence certificate generation"
+git push origin main
+```
+
+No requiere cambiar reglas de Firebase, porque la generación del PDF firmado y del certificado se hace del lado del navegador con los datos ya permitidos por las reglas existentes.

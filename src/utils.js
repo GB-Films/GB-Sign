@@ -14,10 +14,15 @@ export function signatureRequestId(projectId, docId, signerEmail) {
   return `${projectId}_${docId}_${emailKey(signerEmail)}`;
 }
 
-export async function sha256File(file) {
-  const buffer = await file.arrayBuffer();
+export async function sha256Bytes(bytes) {
+  const buffer = bytes instanceof ArrayBuffer ? bytes : bytes.buffer || bytes;
   const digest = await crypto.subtle.digest('SHA-256', buffer);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function sha256File(file) {
+  const buffer = await file.arrayBuffer();
+  return sha256Bytes(buffer);
 }
 
 export function fmtDate(value) {
@@ -36,12 +41,16 @@ export function statusFor(doc, signatures = []) {
   return 'Pendiente';
 }
 
-export function downloadText(filename, text, type = 'text/plain') {
-  const blob = new Blob([text], { type });
+export function downloadBytes(filename, bytes, type = 'application/octet-stream') {
+  const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+export function downloadText(filename, text, type = 'text/plain') {
+  downloadBytes(filename, text, type);
 }
