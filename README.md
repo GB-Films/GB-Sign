@@ -1,17 +1,72 @@
-# GB Sign Firebase
+# GB Sign
 
-App web de firma electrónica para GitHub Pages + Firebase.
+App web de firma electrónica para **GB Films / Gran Berta**, lista para publicar en **GitHub Pages** y usar **Firebase** como backend.
+
+Repositorio previsto:
+
+```txt
+https://github.com/GB-Films/GB-Sign
+```
+
+URL prevista de GitHub Pages:
+
+```txt
+https://gb-films.github.io/GB-Sign/
+```
+
+## Firebase configurado
+
+Proyecto Firebase:
+
+```txt
+gb-sign-e1776
+```
+
+App web:
+
+```txt
+GB Sign
+```
+
+Bucket Storage:
+
+```txt
+gs://gb-sign-e1776.firebasestorage.app
+```
+
+Variables ya cargadas en el repo:
+
+```env
+VITE_FIREBASE_API_KEY=AIzaSyArlGUrcJjYQn1MXfamb1BDWJy-n_-W6aU
+VITE_FIREBASE_AUTH_DOMAIN=gb-sign-e1776.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=gb-sign-e1776
+VITE_FIREBASE_STORAGE_BUCKET=gb-sign-e1776.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=954032772128
+VITE_FIREBASE_APP_ID=1:954032772128:web:040343030879c447329845
+VITE_APP_BASE=/GB-Sign/
+```
+
+Están en:
+
+```txt
+.env.example
+.env.local
+.env.production
+```
+
+`.env.production` queda pensado para que GitHub Actions pueda compilar sin tener que cargar variables manualmente en GitHub.
 
 ## Qué hace
 
 - Login con Google mediante Firebase Authentication.
 - Carpetas de proyectos.
+- Colaboradores por email de Google.
 - Carga de documentos en Firebase Storage.
 - Solicitud de firma a firmantes por mail de Google.
 - Panel de firmas pendientes para cada usuario autenticado.
-- Registro de firma con UID, email, nombre, fecha, user agent, texto de aceptación y hash SHA-256 del archivo.
+- Firma electrónica con evidencia técnica.
+- Registro de UID, email, nombre, fecha, user agent, texto de aceptación y hash SHA-256 del archivo.
 - Descarga/verificación de evidencia en JSON.
-- Colaboradores por proyecto para ver, cargar y descargar documentos.
 
 > Importante: esto implementa firma electrónica con evidencia técnica. No reemplaza una firma digital certificada con certificado emitido por autoridad certificante.
 
@@ -23,74 +78,102 @@ App web de firma electrónica para GitHub Pages + Firebase.
 - Firebase Storage
 - GitHub Pages con GitHub Actions
 
-## Crear proyecto Firebase
+## Instalación local
 
-1. Entrar a Firebase Console y crear un proyecto.
-2. Crear una Web App y copiar la configuración.
-3. Activar Authentication > Sign-in method > Google.
-4. Activar Cloud Firestore.
-5. Activar Storage.
-6. En Authentication > Settings > Authorized domains, agregar:
-   - `localhost`
-   - `TU_USUARIO.github.io`
-   - tu dominio propio, si corresponde.
-
-## Configuración local
+Desde la carpeta del repo:
 
 ```bash
 npm install
-cp .env.example .env.local
 npm run dev
 ```
 
-Completar `.env.local`:
+Abrir la URL local que muestre Vite, normalmente:
 
-```bash
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=...
-VITE_FIREBASE_PROJECT_ID=...
-VITE_FIREBASE_STORAGE_BUCKET=...
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
-VITE_APP_BASE=/nombre-del-repo/
+```txt
+http://localhost:5173
 ```
 
-Si publicás en un dominio raíz o custom domain, `VITE_APP_BASE=/`.
-Si publicás en `https://usuario.github.io/gb-sign-firebase/`, usar `VITE_APP_BASE=/gb-sign-firebase/`.
+## Deploy en GitHub Pages
+
+1. Subir los archivos a `GB-Films/GB-Sign`.
+2. Entrar en GitHub:
+
+```txt
+Settings > Pages
+```
+
+3. En **Build and deployment**, elegir:
+
+```txt
+Source: GitHub Actions
+```
+
+4. Hacer push a `main`.
+5. Esperar que termine el workflow **Deploy to GitHub Pages**.
+
+La app debería quedar publicada en:
+
+```txt
+https://gb-films.github.io/GB-Sign/
+```
+
+## Comandos para pushear
+
+Si ya estás dentro de la carpeta del repo:
+
+```bash
+git add .
+git commit -m "Configure GB Sign Firebase app"
+git push origin main
+```
+
+Si te vuelve a aparecer error porque el remoto tiene cambios:
+
+```bash
+git pull origin main --allow-unrelated-histories
+git push origin main
+```
 
 ## Reglas Firebase
 
-Instalar Firebase CLI:
+Ya están incluidas:
+
+```txt
+firestore.rules
+storage.rules
+firebase.json
+.firebaserc
+```
+
+Para subirlas desde la terminal:
 
 ```bash
 npm install -g firebase-tools
 firebase login
-firebase use --add
-npm run deploy:rules
+firebase deploy --only firestore:rules,storage
 ```
 
-También podés copiar manualmente:
+También podés pegarlas manualmente desde la consola:
 
-- `firestore.rules` en Firestore > Rules.
+- `firestore.rules` en Firestore Database > Rules.
 - `storage.rules` en Storage > Rules.
 
-## Deploy en GitHub Pages
+## Dominios autorizados necesarios
 
-1. Subir el repo a GitHub.
-2. En Settings > Pages, elegir Source: GitHub Actions.
-3. En Settings > Secrets and variables > Actions, crear estos secrets:
+En Firebase:
 
-```bash
-VITE_FIREBASE_API_KEY
-VITE_FIREBASE_AUTH_DOMAIN
-VITE_FIREBASE_PROJECT_ID
-VITE_FIREBASE_STORAGE_BUCKET
-VITE_FIREBASE_MESSAGING_SENDER_ID
-VITE_FIREBASE_APP_ID
-VITE_APP_BASE
+```txt
+Authentication > Settings > Authorized domains
 ```
 
-4. Hacer push a `main`.
+Verificar que estén:
+
+```txt
+localhost
+gb-films.github.io
+```
+
+No agregar `/GB-Sign/`, porque Firebase pide dominio, no ruta.
 
 ## Modelo de datos
 
@@ -103,25 +186,31 @@ projects/{projectId}/documents/{docId}/signatures/{uid}
 Storage: projects/{projectId}/documents/{docId}/{fileName}
 ```
 
-## Flujo de firma
+## Flujo de uso
 
-1. Un colaborador carga un documento y lista mails de firmantes.
-2. El archivo se sube a Storage.
-3. La app calcula SHA-256 localmente y lo guarda en Firestore.
-4. El firmante ingresa con Google.
-5. Si el email autenticado coincide con `signerEmails`, ve el documento pendiente.
-6. Al firmar, se crea un registro inmutable en `signatures/{uid}`.
-7. Desde el documento se puede bajar un JSON de evidencia.
+1. El usuario entra con Google.
+2. Crea una carpeta/proyecto.
+3. Agrega colaboradores por email.
+4. Carga un documento.
+5. Escribe los emails de Google de los firmantes.
+6. El archivo se sube a Firebase Storage.
+7. La app calcula el hash SHA-256 localmente.
+8. El firmante entra con Google usando el mismo email solicitado.
+9. Ve el documento en “Firmas pendientes para mí”.
+10. Revisa el archivo y firma.
+11. La app guarda evidencia en Firestore.
+12. Desde el documento se puede descargar el JSON de evidencia.
 
 ## Limitaciones importantes
 
-- GitHub Pages no ejecuta backend. Por eso el sistema depende de reglas Firebase y del cliente.
-- No hay envío automático de emails. Para eso conviene agregar Cloud Functions, SendGrid/Mailgun o Firebase Extensions.
-- La IP pública del firmante no se registra porque desde frontend puro no es confiable. Con Cloud Functions se puede agregar.
-- El agregado de colaboradores por email queda como invitación interna. Para permisos más estrictos por UID, el colaborador debe iniciar sesión y el owner debe registrar su UID. Esto puede automatizarse con Cloud Functions.
+- GitHub Pages no ejecuta backend. Por eso el sistema depende del frontend y de las reglas Firebase.
+- No hay envío automático de emails. Por ahora la solicitud queda visible cuando el firmante entra con su Google.
+- La IP pública del firmante no se registra porque desde frontend puro no es confiable.
+- Para hacerlo más fuerte legal/técnicamente, conviene sumar Cloud Functions para sellado de tiempo, IP confiable, envío automático de emails y certificado PDF.
 
 ## Próximas mejoras recomendadas
 
+- Link directo de firma por documento.
 - Cloud Function para invitaciones por email.
 - Cloud Function para resolver colaboradores por email a UID.
 - Sellado de tiempo desde servidor.
