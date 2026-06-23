@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDoc, collection, doc, onSnapshot, orderBy, query,
   serverTimestamp, setDoc, updateDoc, where, writeBatch
@@ -7,7 +7,7 @@ import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   CheckCircle2, ClipboardCopy, Download, FileSignature, FolderPlus,
-  LockKeyhole, LogOut, ShieldCheck, Upload, Users
+  LockKeyhole, LogOut, PenLine, ShieldCheck, Upload, Users
 } from 'lucide-react';
 import { auth, db, provider, storage } from './firebase';
 import { Badge, Button, Card, Empty, Field } from './components.jsx';
@@ -15,6 +15,8 @@ import {
   downloadText, emailKey, fmtDate, normalizeEmail, parseEmails,
   sha256File, signatureRequestId, statusFor
 } from './utils.js';
+
+const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
 function useAuth() {
   const [user, setUser] = useState(null);
@@ -206,7 +208,9 @@ async function createSignatureRequests(project, docu) {
   if (!signerEmails.length) return;
   const batch = writeBatch(db);
   signerEmails.forEach((signerEmail) => {
-    const requestRef = doc(db, 'signatureRequests', signatureRequestId(project.id, docu.id, signerEmail));
+    const normalized = normalizeEmail(signerEmail);
+    const requestRef = doc(db, 'signatureRequests', signatureRequestId(project.id, docu.id, normalized));
+    const signatureFields = (docu.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalized);
     batch.set(requestRef, {
       projectId: project.id,
       projectName: project.name || '',
@@ -214,9 +218,11 @@ async function createSignatureRequests(project, docu) {
       docId: docu.id,
       title: docu.title,
       fileName: docu.fileName,
+      contentType: docu.contentType || '',
       storagePath: docu.storagePath || '',
       sha256: docu.sha256,
-      signerEmail: normalizeEmail(signerEmail),
+      signerEmail: normalized,
+      signatureFields,
       requestedByUid: auth.currentUser.uid,
       requestedByEmail: normalizeEmail(auth.currentUser.email),
       createdAt: serverTimestamp(),
@@ -230,31 +236,44 @@ function UploadDocument({ project }) {
   const [title, setTitle] = useState('');
   const [emails, setEmails] = useState('');
   const [file, setFile] = useState(null);
+  const [signatureFields, setSignatureFields] = useState([]);
   const [busy, setBusy] = useState(false);
+  const signerEmails = useMemo(() => parseEmails(emails), [emails]);
+  const fileUrl = useObjectUrl(file);
+
+  useEffect(() => {
+    setSignatureFields((prev) => prev.filter((f) => signerEmails.includes(normalizeEmail(f.signerEmail))));
+  }, [signerEmails.join('|')]);
+
   async function submit(e) {
     e.preventDefault();
     if (!file || !title.trim()) return;
+    if (signerEmails.length && signatureFields.length < signerEmails.length) {
+      alert('Falta marcar al menos un recuadro de firma para cada firmante externo.');
+      return;
+    }
     setBusy(true);
     try {
-      const signerEmails = parseEmails(emails);
       const hash = await sha256File(file);
       const docRef = await addDoc(collection(db, 'projects', project.id, 'documents'), {
         title: title.trim(), fileName: file.name, contentType: file.type || 'application/octet-stream', size: file.size,
-        sha256: hash, signerEmails, uploadedByUid: auth.currentUser.uid, uploadedByEmail: normalizeEmail(auth.currentUser.email),
+        sha256: hash, signerEmails, signatureFields, uploadedByUid: auth.currentUser.uid, uploadedByEmail: normalizeEmail(auth.currentUser.email),
         createdAt: serverTimestamp(), updatedAt: serverTimestamp()
       });
       const storagePath = `projects/${project.id}/documents/${docRef.id}/${file.name}`;
       await uploadBytes(ref(storage, storagePath), file, { contentType: file.type, customMetadata: { projectId: project.id, docId: docRef.id, sha256: hash } });
-      const docPayload = { id: docRef.id, projectId: project.id, title: title.trim(), fileName: file.name, storagePath, sha256: hash, signerEmails };
+      const docPayload = { id: docRef.id, projectId: project.id, title: title.trim(), fileName: file.name, contentType: file.type || 'application/octet-stream', storagePath, sha256: hash, signerEmails, signatureFields };
       await updateDoc(docRef, { storagePath, updatedAt: serverTimestamp() });
       await createSignatureRequests(project, docPayload);
-      setTitle(''); setEmails(''); setFile(null);
+      setTitle(''); setEmails(''); setFile(null); setSignatureFields([]);
     } finally { setBusy(false); }
   }
+
   return <form className="stack" onSubmit={submit}>
     <Field label="Título"><input value={title} onChange={(e)=>setTitle(e.target.value)} placeholder="Ej: Cesión de imagen - Actor"/></Field>
     <Field label="Mails de Google de firmantes externos" hint="Estos correos solo podrán ver y firmar este documento puntual. No son colaboradores internos."><textarea value={emails} onChange={(e)=>setEmails(e.target.value)} placeholder="persona@gmail.com, otra@empresa.com"/></Field>
-    <Field label="Archivo"><input type="file" onChange={(e)=>setFile(e.target.files?.[0] || null)}/></Field>
+    <Field label="Archivo"><input type="file" accept="application/pdf,image/*,.doc,.docx" onChange={(e)=>setFile(e.target.files?.[0] || null)}/></Field>
+    {file && signerEmails.length > 0 && <SignatureFieldDesigner fileUrl={fileUrl} fileName={file.name} contentType={file.type} signerEmails={signerEmails} fields={signatureFields} onChange={setSignatureFields}/>} 
     <Button disabled={busy}>{busy ? 'Subiendo...' : 'Cargar y solicitar firmas'}</Button>
   </form>;
 }
@@ -284,13 +303,19 @@ function Members({ project, currentUser, canManage }) {
 function DocumentRow({ project, docu, signatures }) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
+  const [editFields, setEditFields] = useState(false);
   const tone = statusFor(docu, signatures) === 'Completo' ? 'good' : 'warn';
   async function openFile() {
     const u = await getDownloadURL(ref(storage, docu.storagePath));
     setUrl(u); window.open(u, '_blank', 'noopener,noreferrer');
   }
   function evidence() {
-    const payload = { document: docu, signatures };
+    const payload = {
+      certificateType: 'GB Sign electronic signature evidence',
+      generatedAt: new Date().toISOString(),
+      document: docu,
+      signatures,
+    };
     downloadText(`evidencia-${docu.title}.json`, JSON.stringify(payload, null, 2), 'application/json');
   }
   async function syncRequests() {
@@ -298,28 +323,289 @@ function DocumentRow({ project, docu, signatures }) {
     try { await createSignatureRequests(project, docu); }
     finally { setBusy(false); }
   }
-  return <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={syncRequests} disabled={busy}>{busy ? 'Activando...' : 'Activar firmantes'}</Button><Button variant="ghost" onClick={evidence}>Evidencia</Button>{url && <a href={url}>link</a>}</span></div>;
+  return <>
+    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={syncRequests} disabled={busy}>{busy ? 'Activando...' : 'Activar firmantes'}</Button><Button variant="ghost" onClick={evidence}>Evidencia</Button>{url && <a href={url}>link</a>}</span></div>
+    {editFields && <EditSignatureFields project={project} docu={docu} onClose={() => setEditFields(false)}/>} 
+  </>;
+}
+
+function EditSignatureFields({ project, docu, onClose }) {
+  const [fields, setFields] = useState(docu.signatureFields || []);
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    getDownloadURL(ref(storage, docu.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento:', err.message));
+  }, [docu.storagePath]);
+  async function save() {
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, 'projects', project.id, 'documents', docu.id), { signatureFields: fields, updatedAt: serverTimestamp() });
+      await createSignatureRequests(project, { ...docu, signatureFields: fields });
+      onClose();
+    } finally { setBusy(false); }
+  }
+  return <div className="editorRow"><Card>
+    <div className="cardHead"><h3>Campos de firma: {docu.title}</h3><Button variant="ghost" onClick={onClose}>Cerrar</Button></div>
+    {url ? <SignatureFieldDesigner fileUrl={url} fileName={docu.fileName} contentType={docu.contentType} signerEmails={docu.signerEmails || []} fields={fields} onChange={setFields}/> : <p>Cargando vista previa...</p>}
+    <div className="actions"><Button onClick={save} disabled={busy}>{busy ? 'Guardando...' : 'Guardar campos'}</Button></div>
+  </Card></div>;
 }
 
 function PendingDoc({ request, user }) {
   const [signed, setSigned] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
   useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid), (snap) => setSigned(snap.exists()),
     (err) => console.warn('No se pudo cargar estado de firma:', err.message)), [request.projectId, request.docId, user.uid]);
-  async function view() { window.open(await getDownloadURL(ref(storage, request.storagePath)), '_blank', 'noopener,noreferrer'); }
+  return <div className="pendingBlock"><div className="pending"><div><strong>{request.title}</strong><small>{request.projectName || 'Proyecto'} · {request.fileName}<br/>Hash: {request.sha256}</small></div><div className="actions">{signed ? <Badge tone="good"><CheckCircle2 size={14}/> Firmado</Badge> : <Button onClick={() => setOpen((v)=>!v)}>{open ? 'Cerrar' : 'Abrir para firmar'}</Button>}</div></div>{open && !signed && <SigningRoom request={request} user={user}/>}</div>;
+}
+
+function SigningRoom({ request, user }) {
+  const [url, setUrl] = useState('');
+  const [activeFieldId, setActiveFieldId] = useState('');
+  const [signatureMode, setSignatureMode] = useState('drawn');
+  const [typedName, setTypedName] = useState(user.displayName || '');
+  const [signatureImage, setSignatureImage] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const fields = (request.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalizeEmail(user.email));
+  const activeField = fields.find((f) => f.id === activeFieldId) || fields[0] || null;
+
+  useEffect(() => {
+    getDownloadURL(ref(storage, request.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento:', err.message));
+  }, [request.storagePath]);
+
+  useEffect(() => {
+    if (!activeFieldId && fields[0]) setActiveFieldId(fields[0].id);
+  }, [fields, activeFieldId]);
+
   async function sign() {
+    if (!activeField) { alert('No hay campo de firma asignado para tu mail.'); return; }
+    if (!consent) { alert('Tenés que aceptar el consentimiento de firma electrónica.'); return; }
+    if (signatureMode === 'drawn' && !signatureImage) { alert('Dibujá tu firma o elegí la firma cursiva por nombre.'); return; }
+    if (signatureMode === 'typed' && !typedName.trim()) { alert('Completá tu nombre para la firma cursiva.'); return; }
     setBusy(true);
     try {
+      const renderedSignature = signatureMode === 'typed' ? typedName.trim() : signatureImage;
       await setDoc(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid), {
         uid: user.uid,
         email: normalizeEmail(user.email),
         displayName: user.displayName || '',
         documentSha256: request.sha256,
-        acceptedText: 'Declaro que revisé el documento indicado y acepto firmarlo electrónicamente con mi cuenta Google autenticada.',
+        fieldId: activeField.id,
+        signatureField: activeField,
+        signatureType: signatureMode,
+        signatureImage: signatureMode === 'drawn' ? signatureImage : '',
+        typedName: signatureMode === 'typed' ? typedName.trim() : '',
+        renderedSignature,
+        consentElectronicSignature: true,
+        intentAction: 'El firmante abrió el documento, presionó su campo de firma asignado y confirmó la firma electrónica.',
+        acceptedText: ACCEPTANCE_TEXT,
         userAgent: navigator.userAgent,
+        screen: { width: window.screen?.width || null, height: window.screen?.height || null, pixelRatio: window.devicePixelRatio || 1 },
         signedAt: serverTimestamp(),
       });
     } finally { setBusy(false); }
   }
-  return <div className="pending"><div><strong>{request.title}</strong><small>{request.projectName || 'Proyecto'} · {request.fileName}<br/>Hash: {request.sha256}</small></div><div className="actions"><Button variant="ghost" onClick={view}>Ver</Button>{signed ? <Badge tone="good"><CheckCircle2 size={14}/> Firmado</Badge> : <Button onClick={sign} disabled={busy}>{busy ? 'Firmando...' : 'Firmar'}</Button>}</div></div>;
+
+  return <Card className="signingRoom">
+    <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone="warn">Firma electrónica</Badge></div>
+    <p className="muted">Presioná el recuadro asignado dentro del documento. Luego dibujá tu firma o usá una firma cursiva generada con tu nombre.</p>
+    {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={setActiveFieldId} signatures={buildPreviewSignatures(activeField, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
+    <div className="grid two signControls">
+      <Card>
+        <h3>Campo asignado</h3>
+        {fields.length ? <div className="chips">{fields.map((f) => <button type="button" className={`chip chipButton ${f.id === activeFieldId ? 'active' : ''}`} key={f.id} onClick={() => setActiveFieldId(f.id)}>Página {f.page || 1} · {f.label || 'Firma'}</button>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
+      </Card>
+      <Card>
+        <h3>Tu firma</h3>
+        <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
+        {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
+      </Card>
+    </div>
+    <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
+    <div className="actions"><Button onClick={sign} disabled={busy || !activeField}>{busy ? 'Firmando...' : 'Confirmar firma electrónica'}</Button></div>
+  </Card>;
+}
+
+function buildPreviewSignatures(activeField, signatureMode, signatureImage, typedName) {
+  if (!activeField) return [];
+  if (signatureMode === 'drawn' && signatureImage) return [{ field: activeField, image: signatureImage, type: 'drawn' }];
+  if (signatureMode === 'typed' && typedName.trim()) return [{ field: activeField, typedName: typedName.trim(), type: 'typed' }];
+  return [];
+}
+
+function SignatureFieldDesigner({ fileUrl, fileName, contentType, signerEmails, fields, onChange }) {
+  const [activeEmail, setActiveEmail] = useState(signerEmails[0] || '');
+  const [page, setPage] = useState(1);
+  const [draft, setDraft] = useState(null);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!signerEmails.includes(activeEmail)) setActiveEmail(signerEmails[0] || '');
+  }, [signerEmails, activeEmail]);
+
+  function point(ev) {
+    const rect = wrapRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height));
+    return { x, y };
+  }
+
+  function start(ev) {
+    if (!activeEmail) return;
+    const p = point(ev);
+    setDraft({ sx: p.x, sy: p.y, x: p.x, y: p.y, w: 0, h: 0 });
+  }
+
+  function move(ev) {
+    if (!draft) return;
+    const p = point(ev);
+    setDraft({ ...draft, x: Math.min(draft.sx, p.x), y: Math.min(draft.sy, p.y), w: Math.abs(p.x - draft.sx), h: Math.abs(p.y - draft.sy) });
+  }
+
+  function end() {
+    if (!draft) return;
+    if (draft.w < 0.03 || draft.h < 0.025) { setDraft(null); return; }
+    const clean = normalizeEmail(activeEmail);
+    const nextField = {
+      id: `field_${emailKey(clean)}`,
+      signerEmail: clean,
+      label: `Firma de ${clean}`,
+      page: Number(page) || 1,
+      x: round(draft.x), y: round(draft.y), w: round(draft.w), h: round(draft.h),
+      createdAtClient: new Date().toISOString(),
+    };
+    onChange([...(fields || []).filter((f) => normalizeEmail(f.signerEmail) !== clean), nextField]);
+    setDraft(null);
+  }
+
+  function remove(email) {
+    const clean = normalizeEmail(email);
+    onChange((fields || []).filter((f) => normalizeEmail(f.signerEmail) !== clean));
+  }
+
+  return <div className="signatureDesigner">
+    <div className="designerToolbar">
+      <Field label="Firmante"><select value={activeEmail} onChange={(e)=>setActiveEmail(e.target.value)}>{signerEmails.map((e)=><option value={e} key={e}>{e}</option>)}</select></Field>
+      <Field label="Página"><input type="number" min="1" value={page} onChange={(e)=>setPage(e.target.value)}/></Field>
+      <div className="designerHint">Dibujá un recuadro sobre la zona donde debe aparecer la firma. Se guarda como coordenadas relativas del documento.</div>
+    </div>
+    <div className="docPreview designer" ref={wrapRef} onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}>
+      <PreviewSurface url={fileUrl} fileName={fileName} contentType={contentType} page={page}/>
+      <SignatureOverlay fields={fields || []} activeFieldId={`field_${emailKey(activeEmail)}`} draft={draft} />
+    </div>
+    <div className="fieldStatus">
+      {signerEmails.map((email) => {
+        const field = (fields || []).find((f) => normalizeEmail(f.signerEmail) === normalizeEmail(email));
+        return <div className="fieldStatusItem" key={email}><span>{email}</span>{field ? <Badge tone="good">Campo marcado · pág. {field.page}</Badge> : <Badge tone="warn">Falta campo</Badge>}{field && <Button variant="ghost" type="button" onClick={() => remove(email)}>Borrar</Button>}</div>;
+      })}
+    </div>
+  </div>;
+}
+
+function DocumentPreview({ url, fileName, contentType, fields, activeFieldId, onSelectField, signatures = [] }) {
+  return <div className="docPreview readonly">
+    <PreviewSurface url={url} fileName={fileName} contentType={contentType}/>
+    <SignatureOverlay fields={fields || []} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures}/>
+  </div>;
+}
+
+function PreviewSurface({ url, fileName, contentType, page = 1 }) {
+  const isImage = (contentType || '').startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(fileName || '');
+  const isPdf = (contentType || '').includes('pdf') || /\.pdf$/i.test(fileName || '');
+  if (isImage) return <img className="previewFile" src={url} alt={fileName || 'Documento'} draggable="false"/>;
+  if (isPdf) return <iframe className="previewFile" src={`${url}#toolbar=0&navpanes=0&scrollbar=0&page=${page}&zoom=page-fit`} title={fileName || 'Documento'} />;
+  return <div className="previewFallback"><strong>{fileName}</strong><p>La vista previa completa depende del navegador. Abrí el documento original para revisar el contenido antes de firmar.</p></div>;
+}
+
+function SignatureOverlay({ fields, activeFieldId, onSelectField, draft, signatures = [] }) {
+  return <div className="signatureOverlay">
+    {(fields || []).map((f) => <button type="button" key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)} onClick={(e) => { e.preventDefault(); onSelectField?.(f.id); }}>
+      <span>{f.label || f.signerEmail}</span>
+    </button>)}
+    {signatures.map((sig) => <div key={sig.field.id} className="signatureVisual" style={rectStyle(sig.field)}>{sig.type === 'drawn' ? <img src={sig.image} alt="Firma"/> : <span>{sig.typedName}</span>}</div>)}
+    {draft && <div className="signatureRect draft" style={rectStyle(draft)}><span>Nuevo campo</span></div>}
+  </div>;
+}
+
+function rectStyle(f) {
+  return { left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` };
+}
+
+function round(value) {
+  return Math.round(value * 10000) / 10000;
+}
+
+function SignaturePad({ onChange }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+  const [empty, setEmpty] = useState(true);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = '#141414';
+  }, []);
+
+  function pos(ev) {
+    const point = ev.touches?.[0] || ev;
+    const rect = canvasRef.current.getBoundingClientRect();
+    return { x: point.clientX - rect.left, y: point.clientY - rect.top };
+  }
+
+  function begin(ev) {
+    ev.preventDefault();
+    drawingRef.current = true;
+    const ctx = canvasRef.current.getContext('2d');
+    const p = pos(ev);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+  }
+
+  function move(ev) {
+    if (!drawingRef.current) return;
+    ev.preventDefault();
+    const ctx = canvasRef.current.getContext('2d');
+    const p = pos(ev);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    setEmpty(false);
+    onChange(canvasRef.current.toDataURL('image/png'));
+  }
+
+  function end() {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    if (!empty) onChange(canvasRef.current.toDataURL('image/png'));
+  }
+
+  function clear() {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    setEmpty(true);
+    onChange('');
+  }
+
+  return <div className="padWrap"><canvas ref={canvasRef} className="signaturePad" onMouseDown={begin} onMouseMove={move} onMouseUp={end} onMouseLeave={end} onTouchStart={begin} onTouchMove={move} onTouchEnd={end}/><Button variant="ghost" type="button" onClick={clear}>Limpiar firma</Button></div>;
+}
+
+function useObjectUrl(file) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    if (!file) { setUrl(''); return; }
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+  return url;
 }

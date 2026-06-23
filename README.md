@@ -145,11 +145,30 @@ A partir de ahí vas a poder crear proyectos.
 - Carga de documentos en Firebase Storage.
 - Solicitud de firma a firmantes externos por mail de Google.
 - Panel de documentos asignados para cada firmante.
+- Recuadros de firma configurables por el administrador sobre el documento.
+- Firma con mouse/touch o firma cursiva generada con el nombre del firmante.
 - Firma electrónica con evidencia técnica.
-- Registro de UID, email, nombre, fecha, user agent, texto de aceptación y hash SHA-256 del archivo.
+- Registro de UID, email, nombre, fecha, user agent, texto de aceptación, hash SHA-256, campo de firma, coordenadas del campo y trazo/nombre aplicado.
 - Descarga/verificación de evidencia en JSON.
 
 > Importante: esto implementa firma electrónica con evidencia técnica. No reemplaza una firma digital certificada con certificado emitido por autoridad certificante.
+
+
+## Firma visual y formalidad
+
+La firma no se guarda como un botón genérico. El administrador debe asignar un campo de firma para cada firmante. Cada campo queda registrado con:
+
+- Email del firmante.
+- Página declarada.
+- Coordenadas relativas `x`, `y`, `w`, `h`.
+- Identificador del campo.
+
+Cuando el firmante entra, debe presionar su campo asignado y elegir una de dos opciones:
+
+- Dibujar la firma con mouse o touch.
+- Usar una firma cursiva generada con su nombre.
+
+La evidencia guardada incluye el campo usado, el trazo o nombre aplicado, consentimiento electrónico, UID de Firebase Auth, email autenticado por Google, hash SHA-256 del documento, user agent y fecha de firma.
 
 ## Stack
 
@@ -249,6 +268,7 @@ projects/{projectId}/members/{memberId}
 projects/{projectId}/documents/{docId}
 projects/{projectId}/documents/{docId}/signatures/{uid}
 signatureRequests/{projectId_docId_emailKey}
+Campo nuevo: documents/{docId}.signatureFields[]
 Storage: projects/{projectId}/documents/{docId}/{fileName}
 ```
 
@@ -260,14 +280,15 @@ Storage: projects/{projectId}/documents/{docId}/{fileName}
 2. Agrega colaboradores internos si hace falta.
 3. Carga un documento.
 4. Escribe los emails de Google de los firmantes externos.
-5. La app sube el archivo a Firebase Storage.
-6. La app calcula el hash SHA-256 localmente.
-7. La app crea una solicitud individual en `signatureRequests` para cada firmante.
-8. El firmante entra con Google usando exactamente ese email.
-9. Ve el documento en **Documentos para firmar**.
-10. Revisa el archivo y firma.
-11. La app guarda evidencia en Firestore.
-12. Desde el documento se puede descargar el JSON de evidencia.
+5. Marca un recuadro de firma para cada firmante sobre el documento.
+6. La app sube el archivo a Firebase Storage.
+7. La app calcula el hash SHA-256 localmente.
+8. La app crea una solicitud individual en `signatureRequests` para cada firmante, incluyendo el campo de firma asignado.
+9. El firmante entra con Google usando exactamente ese email.
+10. Ve el documento en **Documentos para firmar**.
+11. Abre el documento, presiona su recuadro de firma, dibuja la firma o usa el nombre cursivo y acepta el consentimiento.
+12. La app guarda evidencia en Firestore.
+13. Desde el documento se puede descargar el JSON de evidencia.
 
 ## Limitaciones importantes
 
@@ -283,5 +304,6 @@ Storage: projects/{projectId}/documents/{docId}/{fileName}
 - Cloud Function para resolver colaboradores por email a UID.
 - Sellado de tiempo desde servidor.
 - Certificado PDF automático con evidencia.
+- Estampado real de la firma sobre una copia PDF final desde Cloud Functions.
 - App Check para reducir abuso desde dominios no autorizados.
 - Panel de auditoría por proyecto.

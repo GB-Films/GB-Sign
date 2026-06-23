@@ -106,7 +106,11 @@ service cloud.firestore {
             && userEmail() in get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.signerEmails
             && !exists(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)/signatures/$(uid))
             && request.resource.data.uid == request.auth.uid
-            && request.resource.data.email == userEmail();
+            && request.resource.data.email == userEmail()
+            && request.resource.data.documentSha256 == get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.sha256
+            && request.resource.data.consentElectronicSignature == true
+            && request.resource.data.signatureField.signerEmail == userEmail()
+            && request.resource.data.signatureType in ['drawn', 'typed'];
 
           allow update, delete: if false;
         }
