@@ -109,6 +109,9 @@ service cloud.firestore {
             && request.resource.data.email == userEmail()
             && request.resource.data.documentSha256 == get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.sha256
             && request.resource.data.consentElectronicSignature == true
+            && request.resource.data.dni is string
+            && request.resource.data.dni.matches('^[0-9]{6,12}$')
+            && request.resource.data.dniConfirmed == true
             && request.resource.data.signatureField.signerEmail == userEmail()
             && request.resource.data.signatureType in ['drawn', 'typed'];
 

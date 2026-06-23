@@ -307,3 +307,10 @@ Storage: projects/{projectId}/documents/{docId}/{fileName}
 - Estampado real de la firma sobre una copia PDF final desde Cloud Functions.
 - App Check para reducir abuso desde dominios no autorizados.
 - Panel de auditoría por proyecto.
+
+
+### Firma visual y DNI
+
+El administrador puede navegar el PDF o imagen, elegir un firmante y activar **Colocar recuadro** para marcar la zona exacta de firma. La app vuelve automáticamente al modo navegación al terminar de dibujar el campo.
+
+El firmante debe abrir el documento, seleccionar su recuadro asignado, completar y confirmar su DNI, elegir firma dibujada o cursiva por nombre y aceptar el consentimiento de firma electrónica. La evidencia guarda DNI confirmado, identidad Google, hash SHA-256, campo visual, coordenadas relativas, tipo de firma y fecha.

@@ -369,16 +369,20 @@ function PendingDoc({ request, user }) {
   return <div className="pendingBlock"><div className="pending"><div><strong>{request.title}</strong><small>{request.projectName || 'Proyecto'} · {request.fileName}<br/>Hash: {request.sha256}</small></div><div className="actions">{signed ? <Badge tone="good"><CheckCircle2 size={14}/> Firmado</Badge> : <Button onClick={() => setOpen((v)=>!v)}>{open ? 'Cerrar' : 'Abrir para firmar'}</Button>}</div></div>{open && !signed && <SigningRoom request={request} user={user}/>}</div>;
 }
 
+
 function SigningRoom({ request, user }) {
   const [url, setUrl] = useState('');
   const [activeFieldId, setActiveFieldId] = useState('');
   const [signatureMode, setSignatureMode] = useState('drawn');
   const [typedName, setTypedName] = useState(user.displayName || '');
   const [signatureImage, setSignatureImage] = useState('');
+  const [dni, setDni] = useState('');
+  const [dniConfirmed, setDniConfirmed] = useState(false);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const fields = (request.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalizeEmail(user.email));
   const activeField = fields.find((f) => f.id === activeFieldId) || fields[0] || null;
+  const cleanDni = normalizeDni(dni);
 
   useEffect(() => {
     getDownloadURL(ref(storage, request.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento:', err.message));
@@ -390,6 +394,8 @@ function SigningRoom({ request, user }) {
 
   async function sign() {
     if (!activeField) { alert('No hay campo de firma asignado para tu mail.'); return; }
+    if (!cleanDni || cleanDni.length < 6) { alert('Completá tu DNI con números.'); return; }
+    if (!dniConfirmed) { alert('Tenés que confirmar que el DNI ingresado es correcto.'); return; }
     if (!consent) { alert('Tenés que aceptar el consentimiento de firma electrónica.'); return; }
     if (signatureMode === 'drawn' && !signatureImage) { alert('Dibujá tu firma o elegí la firma cursiva por nombre.'); return; }
     if (signatureMode === 'typed' && !typedName.trim()) { alert('Completá tu nombre para la firma cursiva.'); return; }
@@ -400,6 +406,10 @@ function SigningRoom({ request, user }) {
         uid: user.uid,
         email: normalizeEmail(user.email),
         displayName: user.displayName || '',
+        dni: cleanDni,
+        dniEntered: dni.trim(),
+        dniConfirmed: true,
+        identityStatement: `El firmante declaró y confirmó DNI ${cleanDni} al momento de firmar.`,
         documentSha256: request.sha256,
         fieldId: activeField.id,
         signatureField: activeField,
@@ -408,7 +418,7 @@ function SigningRoom({ request, user }) {
         typedName: signatureMode === 'typed' ? typedName.trim() : '',
         renderedSignature,
         consentElectronicSignature: true,
-        intentAction: 'El firmante abrió el documento, presionó su campo de firma asignado y confirmó la firma electrónica.',
+        intentAction: 'El firmante abrió el documento, presionó su campo de firma asignado, declaró su DNI y confirmó la firma electrónica.',
         acceptedText: ACCEPTANCE_TEXT,
         userAgent: navigator.userAgent,
         screen: { width: window.screen?.width || null, height: window.screen?.height || null, pixelRatio: window.devicePixelRatio || 1 },
@@ -419,14 +429,19 @@ function SigningRoom({ request, user }) {
 
   return <Card className="signingRoom">
     <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone="warn">Firma electrónica</Badge></div>
-    <p className="muted">Presioná el recuadro asignado dentro del documento. Luego dibujá tu firma o usá una firma cursiva generada con tu nombre.</p>
+    <p className="muted">Presioná tu recuadro asignado dentro del documento. Luego completá tu DNI, dibujá tu firma o usá una firma cursiva generada con tu nombre.</p>
     {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={setActiveFieldId} signatures={buildPreviewSignatures(activeField, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
     <div className="grid two signControls">
       <Card>
         <h3>Campo asignado</h3>
-        {fields.length ? <div className="chips">{fields.map((f) => <button type="button" className={`chip chipButton ${f.id === activeFieldId ? 'active' : ''}`} key={f.id} onClick={() => setActiveFieldId(f.id)}>Página {f.page || 1} · {f.label || 'Firma'}</button>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
+        {fields.length ? <div className="chips">{fields.map((f, idx) => <button type="button" className={`chip chipButton ${f.id === activeFieldId ? 'active' : ''}`} key={f.id} onClick={() => setActiveFieldId(f.id)}>Campo {idx + 1} · {f.label || 'Firma'}</button>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
       </Card>
       <Card>
+        <h3>Identidad del firmante</h3>
+        <Field label="DNI"><input inputMode="numeric" value={dni} onChange={(e)=>setDni(e.target.value)} placeholder="Ej: 34553626"/></Field>
+        <label className="check compactCheck"><input type="checkbox" checked={dniConfirmed} onChange={(e)=>setDniConfirmed(e.target.checked)}/><span>Confirmo que este DNI es correcto y me identifica como firmante.</span></label>
+      </Card>
+      <Card className="wideCard">
         <h3>Tu firma</h3>
         <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
         {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
@@ -446,37 +461,36 @@ function buildPreviewSignatures(activeField, signatureMode, signatureImage, type
 
 function SignatureFieldDesigner({ fileUrl, fileName, contentType, signerEmails, fields, onChange }) {
   const [activeEmail, setActiveEmail] = useState(signerEmails[0] || '');
-  const [page, setPage] = useState(1);
+  const [placing, setPlacing] = useState(false);
   const [draft, setDraft] = useState(null);
-  const overlayRef = useRef(null);
   const drawingRef = useRef(null);
 
   useEffect(() => {
     if (!signerEmails.includes(activeEmail)) setActiveEmail(signerEmails[0] || '');
   }, [signerEmails, activeEmail]);
 
-  function point(ev) {
-    const rect = overlayRef.current.getBoundingClientRect();
+  function point(target, ev) {
+    const rect = target.getBoundingClientRect();
     const x = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
     const y = Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height));
     return { x, y };
   }
 
-  function start(ev) {
-    if (!activeEmail || !overlayRef.current) return;
+  function start(pageNumber, ev) {
+    if (!placing || !activeEmail) return;
     ev.preventDefault();
     ev.stopPropagation();
-    overlayRef.current.setPointerCapture?.(ev.pointerId);
-    const p = point(ev);
-    const next = { sx: p.x, sy: p.y, x: p.x, y: p.y, w: 0, h: 0 };
+    ev.currentTarget.setPointerCapture?.(ev.pointerId);
+    const p = point(ev.currentTarget, ev);
+    const next = { page: pageNumber, sx: p.x, sy: p.y, x: p.x, y: p.y, w: 0, h: 0 };
     drawingRef.current = next;
     setDraft(next);
   }
 
-  function move(ev) {
-    if (!drawingRef.current || !overlayRef.current) return;
+  function move(pageNumber, ev) {
+    if (!drawingRef.current || drawingRef.current.page !== pageNumber) return;
     ev.preventDefault();
-    const p = point(ev);
+    const p = point(ev.currentTarget, ev);
     const base = drawingRef.current;
     const next = {
       ...base,
@@ -495,13 +509,14 @@ function SignatureFieldDesigner({ fileUrl, fileName, contentType, signerEmails, 
     const finalDraft = draft || drawingRef.current;
     drawingRef.current = null;
     setDraft(null);
+    setPlacing(false);
     if (!finalDraft || finalDraft.w < 0.025 || finalDraft.h < 0.018) return;
     const clean = normalizeEmail(activeEmail);
     const nextField = {
       id: `field_${emailKey(clean)}`,
       signerEmail: clean,
       label: `Firma de ${clean}`,
-      page: Number(page) || 1,
+      page: Number(finalDraft.page) || 1,
       x: round(finalDraft.x), y: round(finalDraft.y), w: round(finalDraft.w), h: round(finalDraft.h),
       createdAtClient: new Date().toISOString(),
     };
@@ -514,67 +529,162 @@ function SignatureFieldDesigner({ fileUrl, fileName, contentType, signerEmails, 
   }
 
   return <div className="signatureDesigner">
-    <div className="designerToolbar">
+    <div className="designerToolbar noPageToolbar">
       <Field label="Firmante"><select value={activeEmail} onChange={(e)=>setActiveEmail(e.target.value)}>{signerEmails.map((e)=><option value={e} key={e}>{e}</option>)}</select></Field>
-      <Field label="Página"><input type="number" min="1" value={page} onChange={(e)=>setPage(e.target.value)}/></Field>
-      <div className="designerHint"><strong>Cómo marcar el campo:</strong><br/>Elegí el firmante y arrastrá sobre la vista previa del documento. El recuadro queda asociado solo a ese mail.</div>
+      <div className="designerModeBox">
+        <Button type="button" variant={placing ? 'primary' : 'ghost'} onClick={() => setPlacing((v) => !v)}><PenLine size={16}/>{placing ? 'Modo colocar activo' : 'Colocar recuadro'}</Button>
+        {placing && <Button type="button" variant="ghost" onClick={() => { setPlacing(false); setDraft(null); drawingRef.current = null; }}>Volver a navegar</Button>}
+      </div>
+      <div className="designerHint"><strong>Cómo marcar el campo:</strong><br/>Primero navegá y scrolleá el documento. Cuando estés en el lugar correcto, tocá <strong>Colocar recuadro</strong> y arrastrá sobre la firma. Al soltar, vuelve al modo navegación.</div>
     </div>
-    <div className="docPreview designer">
-      <PreviewSurface url={fileUrl} fileName={fileName} contentType={contentType} page={page}/>
-      <SignatureOverlay
-        fields={fields || []}
-        activeFieldId={`field_${emailKey(activeEmail)}`}
-        draft={draft}
-        designer
-        overlayRef={overlayRef}
-        onPointerDown={start}
-        onPointerMove={move}
-        onPointerUp={end}
-        onPointerCancel={end}
-      />
-    </div>
+    <DocumentSurface
+      url={fileUrl}
+      fileName={fileName}
+      contentType={contentType}
+      fields={fields || []}
+      activeFieldId={`field_${emailKey(activeEmail)}`}
+      designer
+      placing={placing}
+      draft={draft}
+      onPagePointerDown={start}
+      onPagePointerMove={move}
+      onPagePointerUp={end}
+      onPagePointerCancel={end}
+    />
     <div className="fieldStatus">
       {signerEmails.map((email) => {
         const field = (fields || []).find((f) => normalizeEmail(f.signerEmail) === normalizeEmail(email));
-        return <div className="fieldStatusItem" key={email}><span>{email}</span>{field ? <Badge tone="good">Campo marcado · pág. {field.page}</Badge> : <Badge tone="warn">Falta campo</Badge>}{field && <Button variant="ghost" type="button" onClick={() => remove(email)}>Borrar</Button>}</div>;
+        return <div className="fieldStatusItem" key={email}><span>{email}</span>{field ? <Badge tone="good">Campo marcado</Badge> : <Badge tone="warn">Falta campo</Badge>}{field && <Button variant="ghost" type="button" onClick={() => remove(email)}>Borrar</Button>}</div>;
       })}
     </div>
   </div>;
 }
 
 function DocumentPreview({ url, fileName, contentType, fields, activeFieldId, onSelectField, signatures = [] }) {
-  return <div className="docPreview readonly">
-    <PreviewSurface url={url} fileName={fileName} contentType={contentType}/>
-    <SignatureOverlay fields={fields || []} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures}/>
+  return <DocumentSurface url={url} fileName={fileName} contentType={contentType} fields={fields || []} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures}/>;
+}
+
+function DocumentSurface({ url, fileName, contentType, fields = [], activeFieldId, onSelectField, signatures = [], designer = false, placing = false, draft, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
+  const isImage = (contentType || '').startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(fileName || '');
+  const isPdf = (contentType || '').includes('pdf') || /\.pdf$/i.test(fileName || '');
+  const className = `docPreview ${designer ? 'designer' : 'readonly'} ${placing ? 'placing' : 'navigating'}`;
+  if (isPdf) return <PdfDocumentSurface className={className} url={url} fileName={fileName} fields={fields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>;
+  if (isImage) return <ImageDocumentSurface className={className} url={url} fileName={fileName} fields={fields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>;
+  return <div className={className}><div className="previewFallback"><strong>{fileName}</strong><p>La vista previa completa depende del navegador. Para marcar campos visuales con precisión conviene subir PDF o imagen.</p></div></div>;
+}
+
+function ImageDocumentSurface({ className, url, fileName, fields, activeFieldId, onSelectField, signatures, designer, placing, draft, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
+  return <div className={className}>
+    <div className="imagePage docPage">
+      <img className="previewFile" src={url} alt={fileName || 'Documento'} draggable="false"/>
+      <SignaturePageOverlay pageNumber={1} fields={fields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>
+    </div>
   </div>;
 }
 
-function PreviewSurface({ url, fileName, contentType, page = 1 }) {
-  const isImage = (contentType || '').startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(fileName || '');
-  const isPdf = (contentType || '').includes('pdf') || /\.pdf$/i.test(fileName || '');
-  if (isImage) return <img className="previewFile" src={url} alt={fileName || 'Documento'} draggable="false"/>;
-  if (isPdf) return <iframe className="previewFile" src={`${url}#toolbar=0&navpanes=0&scrollbar=0&page=${page}&zoom=page-fit`} title={fileName || 'Documento'} />;
-  return <div className="previewFallback"><strong>{fileName}</strong><p>La vista previa completa depende del navegador. Abrí el documento original para revisar el contenido antes de firmar.</p></div>;
+const PDFJS_CDN_VERSION = '4.10.38';
+let pdfJsPromise = null;
+async function loadPdfJs() {
+  if (!pdfJsPromise) {
+    pdfJsPromise = import(/* @vite-ignore */ `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_CDN_VERSION}/build/pdf.mjs`).then((pdfjs) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_CDN_VERSION}/build/pdf.worker.mjs`;
+      return pdfjs;
+    });
+  }
+  return pdfJsPromise;
 }
 
-function SignatureOverlay({ fields, activeFieldId, onSelectField, draft, signatures = [], designer = false, overlayRef, onPointerDown, onPointerMove, onPointerUp, onPointerCancel }) {
+function PdfDocumentSurface({ className, url, fileName, fields, activeFieldId, onSelectField, signatures, designer, placing, draft, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
+  const [pdf, setPdf] = useState(null);
+  const [pageCount, setPageCount] = useState(0);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    let task = null;
+    setPdf(null); setPageCount(0); setError('');
+    loadPdfJs().then((pdfjs) => {
+      if (cancelled) return;
+      task = pdfjs.getDocument({ url });
+      return task.promise;
+    }).then((loadedPdf) => {
+      if (!loadedPdf || cancelled) return;
+      setPdf(loadedPdf);
+      setPageCount(loadedPdf.numPages || 0);
+    }).catch((err) => {
+      if (!cancelled) setError(err?.message || 'No se pudo cargar la vista previa PDF.');
+    });
+    return () => { cancelled = true; task?.destroy?.(); };
+  }, [url]);
+
+  if (error) return <div className={className}><div className="previewFallback"><strong>{fileName}</strong><p>{error}</p><p>Podés abrir el documento original para revisarlo, pero para marcar campos visuales hace falta que cargue la vista previa PDF.</p></div></div>;
+  if (!pdf) return <div className={className}><div className="previewFallback"><strong>{fileName}</strong><p>Cargando vista previa del PDF...</p></div></div>;
+
+  return <div className={className}>
+    <div className="pdfPageList">
+      {Array.from({ length: pageCount }, (_, i) => {
+        const pageNumber = i + 1;
+        return <PdfPageCanvas key={pageNumber} pdf={pdf} pageNumber={pageNumber}>
+          <SignaturePageOverlay pageNumber={pageNumber} fields={fields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>
+        </PdfPageCanvas>;
+      })}
+    </div>
+  </div>;
+}
+
+function PdfPageCanvas({ pdf, pageNumber, children }) {
+  const canvasRef = useRef(null);
+  const [rendering, setRendering] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    let renderTask = null;
+    setRendering(true);
+    pdf.getPage(pageNumber).then((page) => {
+      if (cancelled) return;
+      const canvas = canvasRef.current;
+      const baseViewport = page.getViewport({ scale: 1.35 });
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(baseViewport.width * dpr);
+      canvas.height = Math.floor(baseViewport.height * dpr);
+      canvas.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      renderTask = page.render({ canvasContext: ctx, viewport: baseViewport });
+      return renderTask.promise;
+    }).then(() => { if (!cancelled) setRendering(false); }).catch((err) => {
+      if (!cancelled) console.warn('No se pudo renderizar página PDF:', err.message);
+    });
+    return () => { cancelled = true; renderTask?.cancel?.(); };
+  }, [pdf, pageNumber]);
+
+  return <div className="pdfPage docPage">
+    <div className="pageLabel">Página {pageNumber}</div>
+    <canvas ref={canvasRef} className={`pdfCanvas ${rendering ? 'loading' : ''}`}/>
+    {children}
+  </div>;
+}
+
+function SignaturePageOverlay({ pageNumber, fields, activeFieldId, onSelectField, draft, signatures = [], designer = false, placing = false, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
+  const pageFields = (fields || []).filter((f) => Number(f.page || 1) === Number(pageNumber));
+  const pageDraft = draft && Number(draft.page || 1) === Number(pageNumber) ? draft : null;
+  const pageSignatures = (signatures || []).filter((sig) => Number(sig.field?.page || 1) === Number(pageNumber));
   return <div
-    ref={overlayRef}
-    className={`signatureOverlay ${designer ? 'designerOverlay' : ''}`}
-    onPointerDown={onPointerDown}
-    onPointerMove={onPointerMove}
-    onPointerUp={onPointerUp}
-    onPointerCancel={onPointerCancel}
-    onPointerLeave={onPointerUp}
+    className={`signatureOverlay ${designer ? 'designerOverlay' : ''} ${placing ? 'placingOverlay' : 'navigateOverlay'}`}
+    onPointerDown={(ev) => onPagePointerDown?.(pageNumber, ev)}
+    onPointerMove={(ev) => onPagePointerMove?.(pageNumber, ev)}
+    onPointerUp={onPagePointerUp}
+    onPointerCancel={onPagePointerCancel}
+    onPointerLeave={onPagePointerUp}
   >
-    {(fields || []).map((f) => designer
+    {pageFields.map((f) => designer
       ? <div key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)}><span>{f.label || f.signerEmail}</span></div>
       : <button type="button" key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)} onClick={(e) => { e.preventDefault(); onSelectField?.(f.id); }}>
         <span>{f.label || f.signerEmail}</span>
       </button>
     )}
-    {signatures.map((sig) => <div key={sig.field.id} className="signatureVisual" style={rectStyle(sig.field)}>{sig.type === 'drawn' ? <img src={sig.image} alt="Firma"/> : <span>{sig.typedName}</span>}</div>)}
-    {draft && <div className="signatureRect draft" style={rectStyle(draft)}><span>Nuevo campo</span></div>}
+    {pageSignatures.map((sig) => <div key={sig.field.id} className="signatureVisual" style={rectStyle(sig.field)}>{sig.type === 'drawn' ? <img src={sig.image} alt="Firma"/> : <span>{sig.typedName}</span>}</div>)}
+    {pageDraft && <div className="signatureRect draft" style={rectStyle(pageDraft)}><span>Nuevo campo</span></div>}
   </div>;
 }
 
@@ -584,6 +694,10 @@ function rectStyle(f) {
 
 function round(value) {
   return Math.round(value * 10000) / 10000;
+}
+
+function normalizeDni(value) {
+  return String(value || '').replace(/\D/g, '').slice(0, 12);
 }
 
 function SignaturePad({ onChange }) {
