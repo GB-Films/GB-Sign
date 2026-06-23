@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function email() { return request.auth.token.email; }
+    function isOwner(projectId) {
+      return signedIn() && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid == request.auth.uid;
+    }
+    function isCollaborator(projectId) {
+      return signedIn() && email() in get(/databases/$(database)/documents/projects/$(projectId)).data.collaboratorEmails;
+    }
+    function isProjectUser(projectId) { return isOwner(projectId) || isCollaborator(projectId); }
+
+    match /users/{uid} {
+      allow read: if signedIn() && uid == request.auth.uid;
+      allow create, update: if signedIn() && uid == request.auth.uid;
+    }
+
+    match /projects/{projectId} {
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isProjectUser(projectId);
+      allow update, delete: if isOwner(projectId);
+
+      match /members/{uid} {
+        allow read: if isProjectUser(projectId);
+        allow create, update, delete: if isOwner(projectId);
+      }
+
+      match /documents/{docId} {
+        allow read: if isProjectUser(projectId) || (signedIn() && email() in resource.data.signerEmails);
+        allow create, update, delete: if isProjectUser(projectId);
+
+        match /signatures/{uid} {
+          allow read: if isProjectUser(projectId) || (signedIn() && uid == request.auth.uid);
+          allow create: if signedIn()
+            && uid == request.auth.uid
+            && email() in get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.signerEmails
+            && !exists(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)/signatures/$(uid))
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.email == email();
+          allow update, delete: if false;
+        }
+      }
+    }
+  }
+}
