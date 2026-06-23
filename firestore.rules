@@ -1,46 +1,128 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() { return request.auth != null; }
-    function email() { return request.auth.token.email; }
-    function isOwner(projectId) {
-      return signedIn() && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid == request.auth.uid;
+
+    function signedIn() {
+      return request.auth != null;
     }
-    function isCollaborator(projectId) {
-      return signedIn() && email() in get(/databases/$(database)/documents/projects/$(projectId)).data.collaboratorEmails;
+
+    function userEmail() {
+      return request.auth.token.email.lower();
     }
-    function isProjectUser(projectId) { return isOwner(projectId) || isCollaborator(projectId); }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function project(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId));
+    }
+
+    function isOwnerProjectDoc() {
+      return signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    function isCollaboratorProjectDoc() {
+      return signedIn()
+        && resource.data.collaboratorEmails is list
+        && userEmail() in resource.data.collaboratorEmails;
+    }
+
+    function isProjectUser(projectId) {
+      let p = project(projectId);
+      return signedIn()
+        && (
+          p.data.ownerUid == request.auth.uid
+          || (
+            p.data.collaboratorEmails is list
+            && userEmail() in p.data.collaboratorEmails
+          )
+        );
+    }
+
+    function isProjectOwner(projectId) {
+      return signedIn()
+        && project(projectId).data.ownerUid == request.auth.uid;
+    }
+
+    function isDocumentSigner() {
+      return signedIn()
+        && resource.data.signerEmails is list
+        && userEmail() in resource.data.signerEmails;
+    }
+
+    function isSignatureRequestSigner() {
+      return signedIn()
+        && resource.data.signerEmail == userEmail();
+    }
+
+    match /admins/{uid} {
+      allow get: if signedIn() && uid == request.auth.uid;
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
 
     match /users/{uid} {
       allow read: if signedIn() && uid == request.auth.uid;
-      allow create, update: if signedIn() && uid == request.auth.uid;
+      allow create, update: if signedIn()
+        && uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == userEmail();
+      allow delete: if false;
     }
 
     match /projects/{projectId} {
-      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow read: if isProjectUser(projectId);
-      allow update, delete: if isOwner(projectId);
+      allow create: if isAdmin()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerEmail == userEmail()
+        && request.resource.data.collaboratorEmails is list;
 
-      match /members/{uid} {
+      allow get, list: if isOwnerProjectDoc() || isCollaboratorProjectDoc();
+      allow update: if isProjectOwner(projectId) || isAdmin();
+      allow delete: if isProjectOwner(projectId) || isAdmin();
+
+      match /members/{memberId} {
         allow read: if isProjectUser(projectId);
-        allow create, update, delete: if isOwner(projectId);
+        allow create, update, delete: if isProjectOwner(projectId) || isAdmin();
       }
 
       match /documents/{docId} {
-        allow read: if isProjectUser(projectId) || (signedIn() && email() in resource.data.signerEmails);
-        allow create, update, delete: if isProjectUser(projectId);
+        allow create: if isProjectUser(projectId)
+          && request.resource.data.signerEmails is list;
+
+        allow update, delete: if isProjectUser(projectId);
+        allow get, list: if isProjectUser(projectId) || isDocumentSigner();
 
         match /signatures/{uid} {
-          allow read: if isProjectUser(projectId) || (signedIn() && uid == request.auth.uid);
+          allow get: if isProjectUser(projectId)
+            || (signedIn() && uid == request.auth.uid);
+
+          allow list: if isProjectUser(projectId);
+
           allow create: if signedIn()
             && uid == request.auth.uid
-            && email() in get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.signerEmails
+            && userEmail() in get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.signerEmails
             && !exists(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)/signatures/$(uid))
             && request.resource.data.uid == request.auth.uid
-            && request.resource.data.email == email();
+            && request.resource.data.email == userEmail();
+
           allow update, delete: if false;
         }
       }
+    }
+
+    match /signatureRequests/{requestId} {
+      allow create, update: if signedIn()
+        && isProjectUser(request.resource.data.projectId)
+        && request.resource.data.signerEmail in get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)/documents/$(request.resource.data.docId)).data.signerEmails;
+
+      allow delete: if signedIn()
+        && isProjectUser(resource.data.projectId);
+
+      allow get, list: if isSignatureRequestSigner()
+        || isProjectUser(resource.data.projectId);
     }
   }
 }

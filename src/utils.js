@@ -6,6 +6,14 @@ export function parseEmails(value = '') {
   return [...new Set(value.split(/[\n,; ]+/).map(normalizeEmail).filter(Boolean))];
 }
 
+export function emailKey(value = '') {
+  return normalizeEmail(value).replace(/[^a-z0-9]/g, '_');
+}
+
+export function signatureRequestId(projectId, docId, signerEmail) {
+  return `${projectId}_${docId}_${emailKey(signerEmail)}`;
+}
+
 export async function sha256File(file) {
   const buffer = await file.arrayBuffer();
   const digest = await crypto.subtle.digest('SHA-256', buffer);

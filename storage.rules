@@ -2,16 +2,26 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     function signedIn() { return request.auth != null; }
-    function email() { return request.auth.token.email; }
+    function email() { return request.auth.token.email.lower(); }
+    function project(projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId));
+    }
+    function document(projectId, docId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)/documents/$(docId));
+    }
     function isOwner(projectId) {
-      return signedIn() && firestore.get(/databases/(default)/documents/projects/$(projectId)).data.ownerUid == request.auth.uid;
+      return signedIn() && project(projectId).data.ownerUid == request.auth.uid;
     }
     function isCollaborator(projectId) {
-      return signedIn() && email() in firestore.get(/databases/(default)/documents/projects/$(projectId)).data.collaboratorEmails;
+      return signedIn()
+        && project(projectId).data.collaboratorEmails is list
+        && email() in project(projectId).data.collaboratorEmails;
     }
     function isProjectUser(projectId) { return isOwner(projectId) || isCollaborator(projectId); }
     function isSigner(projectId, docId) {
-      return signedIn() && email() in firestore.get(/databases/(default)/documents/projects/$(projectId)/documents/$(docId)).data.signerEmails;
+      return signedIn()
+        && document(projectId, docId).data.signerEmails is list
+        && email() in document(projectId, docId).data.signerEmails;
     }
 
     match /projects/{projectId}/documents/{docId}/{fileName} {

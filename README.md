@@ -1,14 +1,14 @@
 # GB Sign
 
-App web de firma electrónica para **GB Films / Gran Berta**, lista para publicar en **GitHub Pages** y usar **Firebase** como backend.
+App web de firma electrónica para **GB Films / Gran Berta**, publicada en **GitHub Pages** y usando **Firebase** como backend.
 
-Repositorio previsto:
+Repositorio:
 
 ```txt
 https://github.com/GB-Films/GB-Sign
 ```
 
-URL prevista de GitHub Pages:
+URL pública:
 
 ```txt
 https://gb-films.github.io/GB-Sign/
@@ -22,19 +22,13 @@ Proyecto Firebase:
 gb-sign-e1776
 ```
 
-App web:
-
-```txt
-GB Sign
-```
-
 Bucket Storage:
 
 ```txt
 gs://gb-sign-e1776.firebasestorage.app
 ```
 
-Variables ya cargadas en el repo:
+Variables cargadas:
 
 ```env
 VITE_FIREBASE_API_KEY=AIzaSyArlGUrcJjYQn1MXfamb1BDWJy-n_-W6aU
@@ -46,24 +40,111 @@ VITE_FIREBASE_APP_ID=1:954032772128:web:040343030879c447329845
 VITE_APP_BASE=/GB-Sign/
 ```
 
-Están en:
+## Roles corregidos
+
+La app separa tres perfiles:
+
+### Administrador interno
+
+Puede:
+
+- Crear proyectos.
+- Ver los proyectos propios.
+- Cargar documentos.
+- Solicitar firmas.
+- Agregar colaboradores internos.
+- Descargar documentos y evidencias.
+
+Para que un usuario sea administrador hay que crear manualmente este documento en Firestore:
 
 ```txt
-.env.example
-.env.local
-.env.production
+admins/{UID_DEL_USUARIO}
 ```
 
-`.env.production` queda pensado para que GitHub Actions pueda compilar sin tener que cargar variables manualmente en GitHub.
+Ejemplo de datos del documento:
+
+```json
+{
+  "email": "tu-mail@gmail.com",
+  "role": "admin",
+  "createdAt": "manual"
+}
+```
+
+El UID aparece dentro de la app cuando el usuario entra sin permisos internos.
+
+### Colaborador interno
+
+Se agrega desde el panel **Colaboradores internos** dentro de un proyecto.
+
+Puede:
+
+- Ver ese proyecto.
+- Cargar documentos.
+- Descargar documentos.
+- Solicitar firmas dentro de ese proyecto.
+
+No puede crear proyectos nuevos, salvo que también sea administrador.
+
+### Firmante externo
+
+Se carga únicamente en el campo **Mails de Google de firmantes externos** al subir un documento.
+
+Puede:
+
+- Entrar con Google.
+- Ver solo los documentos asociados exactamente a su email.
+- Abrir el archivo asignado.
+- Firmar electrónicamente.
+
+No puede:
+
+- Crear proyectos.
+- Ver proyectos internos.
+- Subir documentos.
+- Ver documentos de otros firmantes.
+- Ver carpetas de trabajo.
+
+## Primer setup obligatorio
+
+Después de loguearte por primera vez con tu cuenta interna:
+
+1. Entrá a la app.
+2. Copiá tu UID desde el cartel de acceso limitado.
+3. En Firebase Console abrí:
+
+```txt
+Firestore Database > Data
+```
+
+4. Creá la colección:
+
+```txt
+admins
+```
+
+5. Creá un documento cuyo ID sea tu UID.
+6. Cargá algo así:
+
+```json
+{
+  "email": "tu-mail@gmail.com",
+  "role": "admin"
+}
+```
+
+7. Recargá la app con `Ctrl + F5`.
+
+A partir de ahí vas a poder crear proyectos.
 
 ## Qué hace
 
 - Login con Google mediante Firebase Authentication.
 - Carpetas de proyectos.
-- Colaboradores por email de Google.
+- Colaboradores internos por email de Google.
 - Carga de documentos en Firebase Storage.
-- Solicitud de firma a firmantes por mail de Google.
-- Panel de firmas pendientes para cada usuario autenticado.
+- Solicitud de firma a firmantes externos por mail de Google.
+- Panel de documentos asignados para cada firmante.
 - Firma electrónica con evidencia técnica.
 - Registro de UID, email, nombre, fecha, user agent, texto de aceptación y hash SHA-256 del archivo.
 - Descarga/verificación de evidencia en JSON.
@@ -111,27 +192,10 @@ Source: GitHub Actions
 4. Hacer push a `main`.
 5. Esperar que termine el workflow **Deploy to GitHub Pages**.
 
-La app debería quedar publicada en:
+La app queda publicada en:
 
 ```txt
 https://gb-films.github.io/GB-Sign/
-```
-
-## Comandos para pushear
-
-Si ya estás dentro de la carpeta del repo:
-
-```bash
-git add .
-git commit -m "Configure GB Sign Firebase app"
-git push origin main
-```
-
-Si te vuelve a aparecer error porque el remoto tiene cambios:
-
-```bash
-git pull origin main --allow-unrelated-histories
-git push origin main
 ```
 
 ## Reglas Firebase
@@ -145,7 +209,7 @@ firebase.json
 .firebaserc
 ```
 
-Para subirlas desde la terminal:
+Para subirlas desde terminal:
 
 ```bash
 npm install -g firebase-tools
@@ -178,25 +242,29 @@ No agregar `/GB-Sign/`, porque Firebase pide dominio, no ruta.
 ## Modelo de datos
 
 ```txt
+admins/{uid}
 users/{uid}
 projects/{projectId}
-projects/{projectId}/members/{uid}
+projects/{projectId}/members/{memberId}
 projects/{projectId}/documents/{docId}
 projects/{projectId}/documents/{docId}/signatures/{uid}
+signatureRequests/{projectId_docId_emailKey}
 Storage: projects/{projectId}/documents/{docId}/{fileName}
 ```
 
+`signatureRequests` es la colección que alimenta el panel de firmantes externos. Esto evita que un firmante tenga que ver el proyecto completo.
+
 ## Flujo de uso
 
-1. El usuario entra con Google.
-2. Crea una carpeta/proyecto.
-3. Agrega colaboradores por email.
-4. Carga un documento.
-5. Escribe los emails de Google de los firmantes.
-6. El archivo se sube a Firebase Storage.
-7. La app calcula el hash SHA-256 localmente.
-8. El firmante entra con Google usando el mismo email solicitado.
-9. Ve el documento en “Firmas pendientes para mí”.
+1. Un administrador interno crea el proyecto.
+2. Agrega colaboradores internos si hace falta.
+3. Carga un documento.
+4. Escribe los emails de Google de los firmantes externos.
+5. La app sube el archivo a Firebase Storage.
+6. La app calcula el hash SHA-256 localmente.
+7. La app crea una solicitud individual en `signatureRequests` para cada firmante.
+8. El firmante entra con Google usando exactamente ese email.
+9. Ve el documento en **Documentos para firmar**.
 10. Revisa el archivo y firma.
 11. La app guarda evidencia en Firestore.
 12. Desde el documento se puede descargar el JSON de evidencia.
