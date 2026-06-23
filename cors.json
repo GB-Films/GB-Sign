@@ -1,0 +1,19 @@
+[
+  {
+    "origin": [
+      "https://gb-films.github.io",
+      "http://localhost:5173",
+      "http://localhost:4173"
+    ],
+    "method": ["GET", "HEAD"],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Range",
+      "Accept-Ranges",
+      "x-goog-generation",
+      "x-goog-metageneration"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

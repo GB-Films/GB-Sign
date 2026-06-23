@@ -26,7 +26,6 @@ service cloud.firestore {
 
     function isCollaboratorProjectDoc() {
       return signedIn()
-        && resource.data.collaboratorEmails is list
         && userEmail() in resource.data.collaboratorEmails;
     }
 
@@ -79,7 +78,8 @@ service cloud.firestore {
         && request.resource.data.ownerEmail == userEmail()
         && request.resource.data.collaboratorEmails is list;
 
-      allow get, list: if isOwnerProjectDoc() || isCollaboratorProjectDoc();
+      allow get: if isAdmin() || isOwnerProjectDoc() || isCollaboratorProjectDoc();
+      allow list: if isAdmin() || isOwnerProjectDoc() || isCollaboratorProjectDoc();
       allow update: if isProjectOwner(projectId) || isAdmin();
       allow delete: if isProjectOwner(projectId) || isAdmin();
 
@@ -128,8 +128,10 @@ service cloud.firestore {
       allow delete: if signedIn()
         && isProjectUser(resource.data.projectId);
 
-      allow get, list: if isSignatureRequestSigner()
+      allow get: if isSignatureRequestSigner()
         || isProjectUser(resource.data.projectId);
+
+      allow list: if isSignatureRequestSigner();
     }
   }
 }

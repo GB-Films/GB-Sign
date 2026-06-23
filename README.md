@@ -314,3 +314,26 @@ Storage: projects/{projectId}/documents/{docId}/{fileName}
 El administrador puede navegar el PDF o imagen, elegir un firmante y activar **Colocar recuadro** para marcar la zona exacta de firma. La app vuelve automáticamente al modo navegación al terminar de dibujar el campo.
 
 El firmante debe abrir el documento, seleccionar su recuadro asignado, completar y confirmar su DNI, elegir firma dibujada o cursiva por nombre y aceptar el consentimiento de firma electrónica. La evidencia guarda DNI confirmado, identidad Google, hash SHA-256, campo visual, coordenadas relativas, tipo de firma y fecha.
+
+
+## Configurar CORS para vista previa PDF
+
+La vista previa PDF usa PDF.js y necesita leer el archivo desde Firebase Storage desde el dominio de GitHub Pages. Configurá CORS una vez con Google Cloud CLI:
+
+```powershell
+gcloud auth login
+gcloud config set project gb-sign-e1776
+gcloud storage buckets update gs://gb-sign-e1776.firebasestorage.app --cors-file=cors.json
+```
+
+Alternativa con `gsutil`:
+
+```powershell
+gsutil cors set cors.json gs://gb-sign-e1776.firebasestorage.app
+```
+
+Verificar configuración:
+
+```powershell
+gcloud storage buckets describe gs://gb-sign-e1776.firebasestorage.app --format="default(cors_config)"
+```
