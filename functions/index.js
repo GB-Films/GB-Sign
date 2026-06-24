@@ -13,6 +13,9 @@ const db = getFirestore();
 const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'gb-sign-e1776.firebasestorage.app';
 const bucket = getStorage().bucket(bucketName);
 
+const MIN_SIGNATURE_BOX_W_PT = 180;
+const MIN_SIGNATURE_BOX_H_PT = 70;
+
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
 export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, async (request) => {
@@ -404,12 +407,14 @@ async function loadPdfFonts(pdfDoc) {
 
 async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const { width, height } = page.getSize();
-  const x = Number(field.x || 0) * width;
-  const boxW = Math.max(70, Number(field.w || 0.2) * width);
-  const boxH = Math.max(34, Number(field.h || 0.08) * height);
-  const y = height - (Number(field.y || 0) * height) - boxH;
-  const pad = Math.max(3, Math.min(7, boxH * 0.11));
-  const canShowMeta = boxW >= 150 && boxH >= 56;
+  const boxW = Math.min(width - 24, Math.max(MIN_SIGNATURE_BOX_W_PT, Number(field.w || 0.2) * width));
+  const boxH = Math.min(height - 24, Math.max(MIN_SIGNATURE_BOX_H_PT, Number(field.h || 0.08) * height));
+  const rawX = Number(field.x || 0) * width;
+  const rawY = height - (Number(field.y || 0) * height) - boxH;
+  const x = Math.max(12, Math.min(width - boxW - 12, rawX));
+  const y = Math.max(12, Math.min(height - boxH - 12, rawY));
+  const pad = Math.max(4, Math.min(8, boxH * 0.10));
+  const canShowMeta = true;
   const metaH = canShowMeta ? Math.min(24, Math.max(15, boxH * 0.30)) : 0;
 
   page.drawRectangle({ x, y, width: boxW, height: boxH, borderColor: rgb(0.08, 0.08, 0.08), borderWidth: 0.9, color: rgb(1, 1, 1), opacity: 0.94 });
