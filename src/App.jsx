@@ -19,8 +19,8 @@ import {
   sha256Bytes, sha256File, signatureRequestId, statusFor
 } from './utils.js';
 
-const MIN_SIGNATURE_FIELD_W = 0.30;
-const MIN_SIGNATURE_FIELD_H = 0.085;
+const MIN_SIGNATURE_FIELD_W = 0.42;
+const MIN_SIGNATURE_FIELD_H = 0.12;
 
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
@@ -28,6 +28,8 @@ function getRouteParams() {
   const search = new URLSearchParams(window.location.search);
   let sign = search.get('sign') || '';
   let mobileSign = search.get('mobileSign') || '';
+  let mobileCapture = search.get('mobileCapture') || '';
+  let captureSession = search.get('captureSession') || '';
   const rawHash = (window.location.hash || '').replace(/^#\/?/, '');
   if (rawHash) {
     const hashQueryIndex = rawHash.indexOf('?');
@@ -36,11 +38,15 @@ function getRouteParams() {
     const hashParams = new URLSearchParams(hashQuery);
     sign = sign || hashParams.get('sign') || '';
     mobileSign = mobileSign || hashParams.get('mobileSign') || '';
+    mobileCapture = mobileCapture || hashParams.get('mobileCapture') || '';
+    captureSession = captureSession || hashParams.get('captureSession') || '';
     const parts = hashPath.split('/').filter(Boolean);
     if (!sign && parts[0] === 'sign' && parts[1]) sign = decodeURIComponent(parts[1]);
     if (!mobileSign && (parts[0] === 'mobileSign' || parts[0] === 'mobile-sign') && parts[1]) mobileSign = decodeURIComponent(parts[1]);
+    if (!mobileCapture && (parts[0] === 'mobileCapture' || parts[0] === 'mobile-capture') && parts[1]) mobileCapture = decodeURIComponent(parts[1]);
+    if (!captureSession && (parts[0] === 'mobileCapture' || parts[0] === 'mobile-capture') && parts[2]) captureSession = decodeURIComponent(parts[2]);
   }
-  return { sign, mobileSign };
+  return { sign, mobileSign, mobileCapture, captureSession };
 }
 
 function publicAppUrl() {
@@ -50,9 +56,10 @@ function publicAppUrl() {
   return raw.endsWith('/') ? raw : `${raw}/`;
 }
 
-function buildAppHashLink(kind, requestId) {
+function buildAppHashLink(kind, requestId, extraSegment = '') {
   const url = new URL(publicAppUrl());
-  url.hash = `/${kind}/${encodeURIComponent(requestId)}`;
+  const extra = extraSegment ? `/${encodeURIComponent(extraSegment)}` : '';
+  url.hash = `/${kind}/${encodeURIComponent(requestId)}${extra}`;
   return url.toString();
 }
 
@@ -108,12 +115,16 @@ export default function App() {
   const [signaturesByDoc, setSignaturesByDoc] = useState({});
   const [directRequestId, setDirectRequestId] = useState(() => getRouteParams().sign);
   const [mobileRequestId, setMobileRequestId] = useState(() => getRouteParams().mobileSign);
+  const [mobileCaptureRequestId, setMobileCaptureRequestId] = useState(() => getRouteParams().mobileCapture);
+  const [captureSessionId, setCaptureSessionId] = useState(() => getRouteParams().captureSession);
 
   useEffect(() => {
     const onPop = () => {
       const params = getRouteParams();
       setDirectRequestId(params.sign);
       setMobileRequestId(params.mobileSign);
+      setMobileCaptureRequestId(params.mobileCapture);
+      setCaptureSessionId(params.captureSession);
     };
     window.addEventListener('popstate', onPop);
     window.addEventListener('hashchange', onPop);
@@ -163,6 +174,7 @@ export default function App() {
 
   if (loading || loadingAdmin) return <main className="shell"><Card>Cargando...</Card></main>;
   if (!user) return <Login />;
+  if (mobileCaptureRequestId) return <MobileCaptureRoute requestId={mobileCaptureRequestId} sessionId={captureSessionId} pending={pending} user={user} />;
   if (mobileRequestId) return <MobileSignRoute requestId={mobileRequestId} pending={pending} user={user} />;
 
   return (
@@ -212,8 +224,8 @@ export default function App() {
 }
 
 function Login() {
-  const { sign: directRequestId, mobileSign: mobileRequestId } = getRouteParams();
-  return <main className="login"><Card className="loginCard"><ShieldCheck size={46}/><h1>GB Sign</h1><p>Ingresá con Google. Si sos firmante, solo vas a ver los documentos asignados exactamente a tu correo.</p>{(directRequestId || mobileRequestId) && <div className="directLoginNotice"><strong>{mobileRequestId ? 'Firma desde celular detectada.' : 'Link directo de firma detectado.'}</strong><span>Después de iniciar sesión vas a ir directo al documento si este Google es el mail invitado.</span></div>}<Button onClick={() => signInWithPopup(auth, provider)}>Ingresar con Google</Button></Card></main>;
+  const { sign: directRequestId, mobileSign: mobileRequestId, mobileCapture: mobileCaptureRequestId } = getRouteParams();
+  return <main className="login"><Card className="loginCard"><ShieldCheck size={46}/><h1>GB Sign</h1><p>Ingresá con Google. Si sos firmante, solo vas a ver los documentos asignados exactamente a tu correo.</p>{(directRequestId || mobileRequestId || mobileCaptureRequestId) && <div className="directLoginNotice"><strong>{mobileCaptureRequestId ? 'Captura de firma desde celular detectada.' : mobileRequestId ? 'Firma desde celular detectada.' : 'Link directo de firma detectado.'}</strong><span>Después de iniciar sesión vas a ir directo al documento si este Google es el mail invitado.</span></div>}<Button onClick={() => signInWithPopup(auth, provider)}>Ingresar con Google</Button></Card></main>;
 }
 
 function SignerOnlyNotice({ user }) {
@@ -518,7 +530,7 @@ function SignatureSharePanel({ project, docu }) {
   if (!signerEmails.length) return <div className="editorRow"><Card><p className="muted">Este documento no tiene firmantes externos asignados.</p></Card></div>;
   return <div className="editorRow"><Card className="sharePanel">
     <div className="cardHead"><h3>Compartir link directo de firma</h3><QrCode size={22}/></div>
-    <p className="muted">Cada link es específico para un mail. El firmante entra, inicia sesión con ese Google y va directo al documento. El QR permite firmar desde celular con el dedo.</p>
+    <p className="muted">Cada link es específico para un mail. El firmante entra, inicia sesión con ese Google y va directo al documento. El link abre directo el documento. El QR abre un flujo móvil completo para revisar y firmar desde el celular.</p>
     <div className="shareGrid">
       {signerEmails.map((email) => <SignatureShareRow key={email} project={project} docu={docu} email={email}/>) }
     </div>
@@ -530,17 +542,18 @@ function SignatureShareRow({ project, docu, email }) {
   const [qrDataUrl, setQrDataUrl] = useState('');
   const requestId = signatureRequestId(project.id, docu.id, email);
   const link = signingLink(requestId);
+  const qrLink = mobileSigningLink(requestId);
   const subject = `Firma solicitada: ${docu.title || docu.fileName || 'documento'}`;
   const body = `Hola,\n\nTe comparto el link directo para revisar y firmar el documento \"${docu.title || docu.fileName || 'documento'}\" en GB Sign.\n\nTenés que ingresar con este mail de Google: ${email}\n\nLink de firma:\n${link}\n\nGracias.`;
   const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
   useEffect(() => {
     let cancelled = false;
-    QRCode.toDataURL(link, { margin: 1, width: 180, errorCorrectionLevel: 'M' })
+    QRCode.toDataURL(qrLink, { margin: 1, width: 180, errorCorrectionLevel: 'M' })
       .then((url) => { if (!cancelled) setQrDataUrl(url); })
       .catch((err) => console.warn('No se pudo generar QR:', err.message));
     return () => { cancelled = true; };
-  }, [link]);
+  }, [qrLink]);
 
   async function copyLink() {
     await navigator.clipboard?.writeText(link);
@@ -578,6 +591,10 @@ function signingLink(requestId) {
 
 function mobileSigningLink(requestId) {
   return buildAppHashLink('mobile-sign', requestId);
+}
+
+function mobileCaptureLink(requestId, sessionId) {
+  return buildAppHashLink('mobile-capture', requestId, sessionId);
 }
 
 function safeFileName(value = 'documento') {
@@ -723,8 +740,8 @@ async function loadPdfFonts(pdfDoc) {
 
 async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const { width, height } = page.getSize();
-  const boxW = Math.min(width - 24, Math.max(180, Number(field.w || 0.2) * width));
-  const boxH = Math.min(height - 24, Math.max(70, Number(field.h || 0.08) * height));
+  const boxW = Math.min(width - 24, Math.max(250, Number(field.w || 0.2) * width));
+  const boxH = Math.min(height - 24, Math.max(95, Number(field.h || 0.08) * height));
   const rawX = Number(field.x || 0) * width;
   const rawY = height - (Number(field.y || 0) * height) - boxH;
   const x = Math.max(12, Math.min(width - boxW - 12, rawX));
@@ -1027,10 +1044,30 @@ function MobileSignRoute({ requestId, pending, user }) {
   if (!request) {
     return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo Google que fue invitado a firmar.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
   }
-  return <main className="mobileSignShell"><MobileSignatureOnly request={request} user={user}/></main>;
+  return <main className="mobileSignShell fullMobile"><MobileFullSigningRoom request={request} user={user}/></main>;
 }
 
-function MobileQrPrompt({ link }) {
+function MobileCaptureRoute({ requestId, sessionId, pending, user }) {
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    setWaited(false);
+    const t = setTimeout(() => setWaited(true), 1400);
+    return () => clearTimeout(t);
+  }, [requestId, sessionId, user?.uid]);
+  const request = pending.find((item) => item.id === requestId);
+  if (!sessionId) {
+    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>Este QR no tiene una sesión de captura válida.</p></Card></main>;
+  }
+  if (!request && !waited) {
+    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>Buscando sesión de captura...</p></Card></main>;
+  }
+  if (!request) {
+    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo Google que está firmando en la computadora.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
+  }
+  return <main className="mobileSignShell"><MobileSignatureCaptureOnly request={request} sessionId={sessionId} user={user}/></main>;
+}
+
+function MobileQrPrompt({ link, received = false }) {
   const [qrDataUrl, setQrDataUrl] = useState('');
   useEffect(() => {
     let cancelled = false;
@@ -1039,24 +1076,71 @@ function MobileQrPrompt({ link }) {
       .catch((err) => console.warn('No se pudo generar QR mobile:', err.message));
     return () => { cancelled = true; };
   }, [link]);
-  return <div className="mobileQrPrompt">
-    <div><strong><Smartphone size={16}/> Firmar desde celular</strong><span>Escaneá este QR. En el celular se abre solo el recuadro de firma para dibujar con el dedo y confirmar.</span></div>
-    {qrDataUrl ? <img src={qrDataUrl} alt="QR para firmar desde celular"/> : <span className="muted">Generando QR...</span>}
+  return <div className={`mobileQrPrompt ${received ? 'done' : ''}`}>
+    <div><strong><Smartphone size={16}/> Dibujar firma con el celular</strong><span>{received ? 'Firma recibida. Volvé a la computadora para revisar el documento y confirmar.' : 'Este QR solo sirve para dibujar la firma con el dedo. La confirmación final sigue en esta computadora.'}</span></div>
+    {received ? <Badge tone="good">Firma recibida</Badge> : qrDataUrl ? <img src={qrDataUrl} alt="QR para dibujar firma desde celular"/> : <span className="muted">Generando QR...</span>}
   </div>;
 }
 
-function MobileSignatureOnly({ request, user }) {
-  const [docu, setDocu] = useState(null);
-  const [signed, setSigned] = useState(false);
-  const [fieldPressed, setFieldPressed] = useState(false);
+function MobileSignatureCaptureOnly({ request, sessionId, user }) {
   const [signatureImage, setSignatureImage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  async function sendToDesktop() {
+    if (!signatureImage) { alert('Dibujá tu firma con el dedo antes de enviarla.'); return; }
+    setBusy(true);
+    try {
+      await setDoc(doc(db, 'mobileSignatureCaptures', sessionId), {
+        requestId: request.id,
+        projectId: request.projectId,
+        docId: request.docId,
+        signerEmail: normalizeEmail(user.email),
+        uid: user.uid,
+        displayName: user.displayName || '',
+        signatureImage,
+        status: 'ready',
+        updatedAt: serverTimestamp(),
+        updatedAtIso: new Date().toISOString(),
+      }, { merge: true });
+      setSent(true);
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || 'No se pudo enviar la firma a la computadora.');
+    } finally { setBusy(false); }
+  }
+
+  if (sent) return <Card className="mobileSignCard success"><CheckCircle2 size={46}/><h1>Firma enviada</h1><p>Volvé a la computadora. El dibujo de tu firma ya debería aparecer ahí para continuar la firma electrónica.</p><small>{request.title || request.fileName}</small></Card>;
+
+  return <Card className="mobileSignCard captureOnlyCard">
+    <div className="mobileSignTop"><Smartphone size={34}/><div><h1>Dibujar firma</h1><p>{request.title || request.fileName || 'Documento'}</p></div></div>
+    <p className="muted">Este modo solo captura el dibujo de tu firma y lo envía a la computadora. No confirma la firma todavía.</p>
+    <SignaturePad onChange={setSignatureImage}/>
+    <Button onClick={sendToDesktop} disabled={busy || !signatureImage}>{busy ? 'Enviando...' : 'Enviar firma a la computadora'}</Button>
+  </Card>;
+}
+
+function MobileFullSigningRoom({ request, user }) {
+  const [docu, setDocu] = useState(null);
+  const [url, setUrl] = useState('');
+  const [signed, setSigned] = useState(false);
+  const [activeFieldId, setActiveFieldId] = useState('');
+  const [fieldClicked, setFieldClicked] = useState(false);
+  const [signatureMode, setSignatureMode] = useState('drawn');
+  const [typedName, setTypedName] = useState(user.displayName || '');
+  const [signatureImage, setSignatureImage] = useState('');
+  const [mobileSignatureReceived, setMobileSignatureReceived] = useState(false);
   const [dni, setDni] = useState('');
   const [dniConfirmed, setDniConfirmed] = useState(false);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
-  const cleanDni = normalizeDni(dni);
   const fields = (request.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalizeEmail(user.email));
-  const activeField = fields[0] || null;
+  const activeField = fields.find((f) => f.id === activeFieldId) || null;
+  const cleanDni = normalizeDni(dni);
+
+  useEffect(() => {
+    getDownloadURL(ref(storage, request.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento mobile:', err.message));
+  }, [request.storagePath]);
 
   useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId), (snap) => {
     if (snap.exists()) setDocu({ id: snap.id, projectId: request.projectId, ...snap.data() });
@@ -1065,9 +1149,16 @@ function MobileSignatureOnly({ request, user }) {
   useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid), (snap) => setSigned(snap.exists()),
     (err) => console.warn('No se pudo cargar firma mobile:', err.message)), [request.projectId, request.docId, user.uid]);
 
+  function selectSignatureField(fieldId) {
+    setActiveFieldId(fieldId);
+    setFieldClicked(true);
+    setTimeout(() => document.getElementById('mobile-signature-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  }
+
   async function submit() {
-    if (!activeField || !fieldPressed) { alert('Primero tocá el recuadro naranja para firmar.'); return; }
-    if (!signatureImage) { alert('Dibujá tu firma con el dedo.'); return; }
+    if (!activeField || !fieldClicked) { alert('Primero tocá el recuadro naranja de firma dentro del documento.'); return; }
+    if (signatureMode === 'drawn' && !signatureImage) { alert('Dibujá tu firma con el dedo o elegí firma cursiva.'); return; }
+    if (signatureMode === 'typed' && !typedName.trim()) { alert('Completá tu nombre para la firma cursiva.'); return; }
     if (!cleanDni || cleanDni.length < 6) { alert('Completá tu DNI con números.'); return; }
     if (!dniConfirmed) { alert('Confirmá que el DNI ingresado es correcto.'); return; }
     if (!consent) { alert('Aceptá el consentimiento de firma electrónica.'); return; }
@@ -1080,9 +1171,9 @@ function MobileSignatureOnly({ request, user }) {
         requestId: request.id,
         fieldId: activeField.id,
         signatureField: activeField,
-        signatureType: 'drawn',
-        signatureImage,
-        typedName: '',
+        signatureType: signatureMode,
+        signatureImage: signatureMode === 'drawn' ? signatureImage : '',
+        typedName: signatureMode === 'typed' ? typedName.trim() : '',
         dni: cleanDni,
         dniEntered: dni.trim(),
         acceptedText: ACCEPTANCE_TEXT,
@@ -1091,7 +1182,7 @@ function MobileSignatureOnly({ request, user }) {
           screen: { width: window.screen?.width || null, height: window.screen?.height || null, pixelRatio: window.devicePixelRatio || 1 },
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
           language: navigator.language || '',
-          mobileQrFlow: true,
+          fullMobileFlow: true,
         },
       });
       setSigned(true);
@@ -1101,21 +1192,26 @@ function MobileSignatureOnly({ request, user }) {
     } finally { setBusy(false); }
   }
 
-  if (signed) return <Card className="mobileSignCard success"><CheckCircle2 size={46}/><h1>Firma enviada</h1><p>Tu firma fue registrada correctamente. La computadora donde estaba abierto el documento se actualizará automáticamente.</p><small>{docu?.title || request.title}</small></Card>;
+  if (signed) return <Card className="mobileSignCard success"><CheckCircle2 size={46}/><h1>Documento firmado</h1><p>Tu firma fue registrada correctamente.</p><small>{docu?.title || request.title || request.fileName}</small></Card>;
 
-  return <Card className="mobileSignCard">
-    <div className="mobileSignTop"><ShieldCheck size={34}/><div><h1>Firmar con el dedo</h1><p>{docu?.title || request.title || 'Documento'}</p></div></div>
-    <button type="button" className={`mobileFieldBox ${fieldPressed ? 'done' : ''}`} onClick={() => setFieldPressed(true)}>
-      <span>{fieldPressed ? 'Recuadro seleccionado' : 'Tocá este recuadro para firmar'}</span>
-    </button>
-    {fieldPressed && <>
-      <SignaturePad onChange={setSignatureImage}/>
-      <Field label="DNI"><input inputMode="numeric" value={dni} onChange={(e)=>setDni(e.target.value)} placeholder="Ej: 34553626"/></Field>
-      <label className="check compactCheck"><input type="checkbox" checked={dniConfirmed} onChange={(e)=>setDniConfirmed(e.target.checked)}/><span>Confirmo que este DNI es correcto.</span></label>
-      <label className="check compactCheck"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
-      <Button onClick={submit} disabled={busy || !signatureImage}>{busy ? 'Enviando firma...' : 'Confirmar firma'}</Button>
-    </>}
-    {!activeField && <p className="muted">No hay un campo de firma asignado a este mail.</p>}
+  return <Card className="mobileSignCard mobileFullCard">
+    <div className="mobileSignTop"><ShieldCheck size={34}/><div><h1>Revisar y firmar</h1><p>{docu?.title || request.title || request.fileName || 'Documento'}</p></div></div>
+    <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso 1: tocá el recuadro naranja en el documento'}</strong><span>{fieldClicked ? 'Ahora completá tu firma, DNI y consentimiento.' : 'Revisá el documento y tocá el campo de firma asignado a tu mail.'}</span></div>
+    {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
+    <div id="mobile-signature-controls" className="mobileControlStack">
+      <Card>
+        <h3>Paso 2: firma</h3>
+        <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar con el dedo</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
+        {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
+      </Card>
+      <Card>
+        <h3>Paso 3: identidad</h3>
+        <Field label="DNI"><input inputMode="numeric" value={dni} onChange={(e)=>setDni(e.target.value)} placeholder="Ej: 34553626"/></Field>
+        <label className="check compactCheck"><input type="checkbox" checked={dniConfirmed} onChange={(e)=>setDniConfirmed(e.target.checked)}/><span>Confirmo que este DNI es correcto y me identifica como firmante.</span></label>
+      </Card>
+      <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
+      <Button onClick={submit} disabled={busy || !fieldClicked || !activeField}>{busy ? 'Firmando...' : fieldClicked ? 'Confirmar firma electrónica' : 'Primero tocá el recuadro'}</Button>
+    </div>
   </Card>;
 }
 
@@ -1126,6 +1222,7 @@ function SigningRoom({ request, user, docu }) {
   const [signatureMode, setSignatureMode] = useState('drawn');
   const [typedName, setTypedName] = useState(user.displayName || '');
   const [signatureImage, setSignatureImage] = useState('');
+  const [mobileSignatureReceived, setMobileSignatureReceived] = useState(false);
   const [dni, setDni] = useState('');
   const [dniConfirmed, setDniConfirmed] = useState(false);
   const [consent, setConsent] = useState(false);
@@ -1133,11 +1230,36 @@ function SigningRoom({ request, user, docu }) {
   const fields = (request.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalizeEmail(user.email));
   const activeField = fields.find((f) => f.id === activeFieldId) || null;
   const cleanDni = normalizeDni(dni);
-  const mobileLink = mobileSigningLink(request.id);
+  const captureSessionId = useMemo(() => `capture_${request.id}_${user.uid}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`, [request.id, user.uid]);
+  const mobileLink = mobileCaptureLink(request.id, captureSessionId);
 
   useEffect(() => {
     getDownloadURL(ref(storage, request.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento:', err.message));
   }, [request.storagePath]);
+
+  useEffect(() => {
+    if (!captureSessionId) return;
+    const captureRef = doc(db, 'mobileSignatureCaptures', captureSessionId);
+    setDoc(captureRef, {
+      requestId: request.id,
+      projectId: request.projectId,
+      docId: request.docId,
+      signerEmail: normalizeEmail(user.email),
+      uid: user.uid,
+      status: 'waiting',
+      createdAt: serverTimestamp(),
+      createdAtIso: new Date().toISOString(),
+      updatedAt: serverTimestamp(),
+    }, { merge: true }).catch((err) => console.warn('No se pudo crear sesión mobile:', err.message));
+    return onSnapshot(captureRef, (snap) => {
+      const data = snap.data() || {};
+      if (data.status === 'ready' && data.signatureImage) {
+        setSignatureMode('drawn');
+        setSignatureImage(data.signatureImage);
+        setMobileSignatureReceived(true);
+      }
+    }, (err) => console.warn('No se pudo escuchar firma mobile:', err.message));
+  }, [captureSessionId, request.id, request.projectId, request.docId, user.uid, user.email]);
 
 
   function selectSignatureField(fieldId) {
@@ -1184,7 +1306,7 @@ function SigningRoom({ request, user, docu }) {
   return <Card className="signingRoom">
     <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone="warn">Firma electrónica</Badge></div>
     <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso obligatorio: presioná el recuadro naranja de firma'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : 'Para dejar constancia de intención, tocá/clickeá el recuadro asignado dentro del documento antes de avanzar.'}</span></div>
-    <MobileQrPrompt link={mobileLink} />
+    <MobileQrPrompt link={mobileLink} received={mobileSignatureReceived} />
     {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
     <div className="grid two signControls">
       <Card>

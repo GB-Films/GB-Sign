@@ -110,6 +110,20 @@ service cloud.firestore {
     }
 
 
+
+    match /mobileSignatureCaptures/{sessionId} {
+      allow create: if signedIn()
+        && request.resource.data.signerEmail == userEmail()
+        && request.resource.data.requestId is string;
+      allow get: if signedIn()
+        && resource.data.signerEmail == userEmail();
+      allow update: if signedIn()
+        && resource.data.signerEmail == userEmail()
+        && request.resource.data.signerEmail == resource.data.signerEmail
+        && request.resource.data.requestId == resource.data.requestId;
+      allow list, delete: if false;
+    }
+
     match /artifactEvents/{eventId} {
       allow read: if isAdmin();
       allow create, update, delete: if false;

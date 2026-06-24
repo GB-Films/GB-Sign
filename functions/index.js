@@ -13,8 +13,8 @@ const db = getFirestore();
 const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'gb-sign-e1776.firebasestorage.app';
 const bucket = getStorage().bucket(bucketName);
 
-const MIN_SIGNATURE_BOX_W_PT = 180;
-const MIN_SIGNATURE_BOX_H_PT = 70;
+const MIN_SIGNATURE_BOX_W_PT = 250;
+const MIN_SIGNATURE_BOX_H_PT = 95;
 
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
