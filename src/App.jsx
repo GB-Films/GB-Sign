@@ -3,6 +3,7 @@ import {
   addDoc, collection, doc, onSnapshot, orderBy, query,
   serverTimestamp, setDoc, updateDoc, where, writeBatch
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
@@ -10,7 +11,7 @@ import {
   LockKeyhole, LogOut, PenLine, Settings, ShieldCheck, Upload, Users
 } from 'lucide-react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { auth, db, provider, storage } from './firebase';
+import { auth, db, provider, storage, functions } from './firebase';
 import { Badge, Button, Card, Empty, Field } from './components.jsx';
 import {
   downloadBytes, downloadText, emailKey, fmtDate, normalizeEmail, parseEmails,
@@ -341,29 +342,53 @@ function DocumentRow({ project, docu, signatures }) {
     if (!signatures.length) { alert('Todavía no hay firmas para estampar en el PDF.'); return; }
     setPdfBusy('signed');
     try {
-      const bytes = await buildSignedPdf({ project, docu, signatures });
-      downloadBytes(`${safeFileName(docu.title)}-firmado-gb-sign.pdf`, bytes, 'application/pdf');
+      const path = await ensureServerArtifact('signed');
+      await downloadStoragePath(path, `${safeFileName(docu.title)}-firmado-gb-sign.pdf`);
     } catch (err) {
       console.error(err);
-      alert(`No se pudo generar el PDF firmado: ${err.message || err}`);
+      alert(`No se pudo descargar/generar el PDF firmado: ${err.message || err}`);
     } finally {
       setPdfBusy('');
     }
   }
 
+
   async function downloadCertificatePdf() {
     if (!signatures.length) { alert('Todavía no hay firmas para certificar.'); return; }
     setPdfBusy('certificate');
     try {
-      const bytes = await buildEvidenceCertificatePdf({ project, docu, signatures });
-      downloadBytes(`${safeFileName(docu.title)}-certificado-evidencia-gb-sign.pdf`, bytes, 'application/pdf');
+      const path = await ensureServerArtifact('certificate');
+      await downloadStoragePath(path, `${safeFileName(docu.title)}-certificado-evidencia-gb-sign.pdf`);
     } catch (err) {
       console.error(err);
-      alert(`No se pudo generar el certificado: ${err.message || err}`);
+      alert(`No se pudo descargar/generar el certificado: ${err.message || err}`);
     } finally {
       setPdfBusy('');
     }
   }
+
+
+  async function ensureServerArtifact(type) {
+    const current = type === 'signed'
+      ? docu.serverArtifacts?.signedPdfPath
+      : docu.serverArtifacts?.certificatePdfPath;
+    if (current) return current;
+    const generateArtifacts = httpsCallable(functions, 'generateDocumentArtifacts');
+    const result = await generateArtifacts({ projectId: project.id, docId: docu.id });
+    const data = result.data || {};
+    const path = type === 'signed' ? data.signedPdfPath : data.certificatePdfPath;
+    if (!path) throw new Error('La función no devolvió la ruta del archivo generado.');
+    return path;
+  }
+
+  async function downloadStoragePath(path, filename) {
+    const u = await getDownloadURL(ref(storage, path));
+    const response = await fetch(u);
+    if (!response.ok) throw new Error(`Storage respondió ${response.status}`);
+    const blob = await response.blob();
+    downloadBytes(filename, blob, blob.type || 'application/pdf');
+  }
+
 
   async function syncRequests() {
     setBusy(true);
@@ -372,7 +397,7 @@ function DocumentRow({ project, docu, signatures }) {
   }
 
   return <>
-    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={syncRequests} disabled={busy}>{busy ? 'Activando...' : 'Activar firmantes'}</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado PDF'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{url && <a href={url}>link</a>}</span></div>
+    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={syncRequests} disabled={busy}>{busy ? 'Activando...' : 'Activar firmantes'}</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado servidor'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado servidor'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{url && <a href={url}>link</a>}</span></div>
     {editFields && <EditSignatureFields project={project} docu={docu} onClose={() => setEditFields(false)}/>} 
   </>;
 }
@@ -682,31 +707,32 @@ function SigningRoom({ request, user }) {
     if (signatureMode === 'typed' && !typedName.trim()) { alert('Completá tu nombre para la firma cursiva.'); return; }
     setBusy(true);
     try {
-      const renderedSignature = signatureMode === 'typed' ? typedName.trim() : signatureImage;
-      await setDoc(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid), {
-        uid: user.uid,
-        email: normalizeEmail(user.email),
-        displayName: user.displayName || '',
-        dni: cleanDni,
-        dniEntered: dni.trim(),
-        dniConfirmed: true,
-        identityStatement: `El firmante declaró y confirmó DNI ${cleanDni} al momento de firmar.`,
-        documentSha256: request.sha256,
+      const signDocument = httpsCallable(functions, 'signDocument');
+      await signDocument({
+        projectId: request.projectId,
+        docId: request.docId,
+        requestId: request.id,
         fieldId: activeField.id,
         signatureField: activeField,
         signatureType: signatureMode,
         signatureImage: signatureMode === 'drawn' ? signatureImage : '',
         typedName: signatureMode === 'typed' ? typedName.trim() : '',
-        renderedSignature,
-        consentElectronicSignature: true,
-        intentAction: 'El firmante abrió el documento, presionó su campo de firma asignado, declaró su DNI y confirmó la firma electrónica.',
+        dni: cleanDni,
+        dniEntered: dni.trim(),
         acceptedText: ACCEPTANCE_TEXT,
-        userAgent: navigator.userAgent,
-        screen: { width: window.screen?.width || null, height: window.screen?.height || null, pixelRatio: window.devicePixelRatio || 1 },
-        signedAt: serverTimestamp(),
+        clientEvidence: {
+          userAgent: navigator.userAgent,
+          screen: { width: window.screen?.width || null, height: window.screen?.height || null, pixelRatio: window.devicePixelRatio || 1 },
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+          language: navigator.language || '',
+        },
       });
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || 'No se pudo completar la firma.');
     } finally { setBusy(false); }
   }
+
 
   return <Card className="signingRoom">
     <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone="warn">Firma electrónica</Badge></div>

@@ -30,5 +30,12 @@ service firebase.storage {
         && request.resource.size < 50 * 1024 * 1024
         && request.resource.contentType.matches('application/pdf|image/.*|application/vnd.openxmlformats-officedocument.*|application/msword|text/plain');
     }
+
+    match /projects/{projectId}/artifacts/{docId}/{fileName} {
+      allow read: if isProjectUser(projectId) || isSigner(projectId, docId);
+      // Los PDFs firmados/certificados se escriben exclusivamente desde Cloud Functions con Admin SDK.
+      allow write: if false;
+    }
+
   }
 }

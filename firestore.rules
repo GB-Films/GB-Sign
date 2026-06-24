@@ -101,23 +101,18 @@ service cloud.firestore {
 
           allow list: if isProjectUser(projectId);
 
-          allow create: if signedIn()
-            && uid == request.auth.uid
-            && userEmail() in get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.signerEmails
-            && !exists(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)/signatures/$(uid))
-            && request.resource.data.uid == request.auth.uid
-            && request.resource.data.email == userEmail()
-            && request.resource.data.documentSha256 == get(/databases/$(database)/documents/projects/$(projectId)/documents/$(docId)).data.sha256
-            && request.resource.data.consentElectronicSignature == true
-            && request.resource.data.dni is string
-            && request.resource.data.dni.matches('^[0-9]{6,12}$')
-            && request.resource.data.dniConfirmed == true
-            && request.resource.data.signatureField.signerEmail == userEmail()
-            && request.resource.data.signatureType in ['drawn', 'typed'];
-
-          allow update, delete: if false;
+          // Las firmas ya no se crean desde el navegador.
+          // Se registran exclusivamente desde Cloud Functions con Firebase Admin SDK,
+          // que verifica Auth, mail, DNI, campo de firma, hash y hora de servidor.
+          allow create, update, delete: if false;
         }
       }
+    }
+
+
+    match /artifactEvents/{eventId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     match /signatureRequests/{requestId} {

@@ -383,3 +383,64 @@ git push origin main
 ```
 
 No requiere cambiar reglas de Firebase, porque la generación del PDF firmado y del certificado se hace del lado del navegador con los datos ya permitidos por las reglas existentes.
+
+## Firma con respaldo de servidor (Cloud Functions)
+
+Esta versión suma dos funciones backend:
+
+- `signDocument`: la llama el firmante al confirmar la firma. La función verifica `request.auth`, email Google, UID, solicitud de firma, campo de firma asignado, DNI, hash del documento y que no exista una firma previa. Luego registra la evidencia con hora de servidor, genera el PDF firmado y genera el certificado de evidencia.
+- `generateDocumentArtifacts`: permite regenerar desde backend el PDF firmado y el certificado de evidencia para un documento ya firmado.
+
+Los firmantes ya no pueden escribir directamente en `projects/{projectId}/documents/{docId}/signatures/{uid}` desde el navegador. Las reglas lo bloquean y las firmas se crean solo con Firebase Admin SDK desde Cloud Functions.
+
+### Deploy de backend Firebase
+
+El proyecto debe estar en plan Blaze para desplegar Cloud Functions.
+
+```powershell
+firebase login --reauth
+firebase deploy --project gb-sign-e1776 --only firestore:rules,storage,functions
+```
+
+Solo funciones:
+
+```powershell
+firebase deploy --project gb-sign-e1776 --only functions
+```
+
+Solo reglas:
+
+```powershell
+firebase deploy --project gb-sign-e1776 --only firestore:rules,storage
+```
+
+### Archivos generados por servidor
+
+Los PDFs finales se guardan en Storage:
+
+```text
+projects/{projectId}/artifacts/{docId}/{documento}-firmado-gb-sign.pdf
+projects/{projectId}/artifacts/{docId}/{documento}-certificado-evidencia-gb-sign.pdf
+```
+
+Firestore guarda las rutas y hashes en:
+
+```text
+projects/{projectId}/documents/{docId}.serverArtifacts
+```
+
+Campos principales:
+
+```json
+{
+  "signedPdfPath": "...",
+  "certificatePdfPath": "...",
+  "originalSha256": "...",
+  "signedPdfSha256": "...",
+  "certificateSha256": "...",
+  "generatedAt": "server timestamp",
+  "generatedByEmail": "...",
+  "generator": "Cloud Functions / pdf-lib",
+  "evidenceVersion": "server-v1"
+}
+```
