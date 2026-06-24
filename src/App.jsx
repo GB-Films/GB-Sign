@@ -9,7 +9,7 @@ import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   CheckCircle2, ClipboardCopy, Download, ExternalLink, FileSignature, FolderPlus,
-  LockKeyhole, LogOut, Mail, PenLine, QrCode, Settings, ShieldCheck, Smartphone, Trash2, Upload, Users
+  LockKeyhole, LogOut, Mail, PenLine, QrCode, Settings, ShieldCheck, Smartphone, Trash2, Upload, UserCircle, Users
 } from 'lucide-react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { auth, db, provider, storage, functions } from './firebase';
@@ -117,6 +117,7 @@ export default function App() {
   const [mobileRequestId, setMobileRequestId] = useState(() => getRouteParams().mobileSign);
   const [mobileCaptureRequestId, setMobileCaptureRequestId] = useState(() => getRouteParams().mobileCapture);
   const [captureSessionId, setCaptureSessionId] = useState(() => getRouteParams().captureSession);
+  const [focusedRequestId, setFocusedRequestId] = useState('');
 
   useEffect(() => {
     const onPop = () => {
@@ -177,6 +178,9 @@ export default function App() {
   if (mobileCaptureRequestId) return <MobileCaptureRoute requestId={mobileCaptureRequestId} sessionId={captureSessionId} pending={pending} user={user} />;
   if (mobileRequestId) return <MobileSignRoute requestId={mobileRequestId} pending={pending} user={user} />;
 
+  const focusedRequest = pending.find((item) => item.id === (focusedRequestId || directRequestId));
+  if (focusedRequest) return <FocusedSignerPage request={focusedRequest} user={user} roleLabel={canManageApp ? 'Administrador' : projects.length ? 'Colaborador' : 'Firmante'} onClose={() => { setFocusedRequestId(''); if (directRequestId) setDirectRequestId(''); }} />;
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -184,15 +188,9 @@ export default function App() {
           <h1>GB Sign</h1>
           <p>Gestión interna de documentos y firma electrónica con acceso externo limitado por mail.</p>
         </div>
-        <div className="userbox">
-          {user.photoURL && <img src={user.photoURL} alt="" />}
-          <span>{user.displayName || user.email}</span>
-          <Badge tone={canManageApp ? 'good' : projects.length ? 'neutral' : 'warn'}>{canManageApp ? 'Administrador' : projects.length ? 'Colaborador' : 'Firmante'}</Badge>
-          <Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Salir</Button>
-        </div>
+        <UserBox user={user} roleLabel={canManageApp ? 'Administrador' : projects.length ? 'Colaborador' : 'Firmante'} roleTone={canManageApp ? 'good' : projects.length ? 'neutral' : 'warn'} />
       </header>
 
-      {isSignerOnly && <SignerOnlyNotice user={user} />}
 
       <section className={`grid ${isSignerOnly ? 'one' : 'two'}`}>
         {!isSignerOnly && (
@@ -212,7 +210,7 @@ export default function App() {
           <div className="cardHead"><h2>Documentos para firmar</h2><FileSignature size={22}/></div>
           <div className="list">
             {directRequestId && pending.length > 0 && !pending.some((d) => d.id === directRequestId) && <div className="directLinkWarning"><strong>Link de firma detectado.</strong><span>No encontramos ese documento para este mail. Verificá que hayas ingresado con el Google exacto que fue invitado a firmar.</span></div>}
-            {pending.map((d) => <PendingDoc key={d.id} request={d} user={user} directOpen={directRequestId === d.id}/>) }
+            {pending.map((d) => <PendingDoc key={d.id} request={d} user={user} directOpen={directRequestId === d.id} onFocus={setFocusedRequestId}/>) }
             {!pending.length && <Empty title="Sin documentos asignados">Cuando pidan una firma con este mail de Google, el documento aparecerá acá.</Empty>}
           </div>
         </Card>
@@ -226,6 +224,45 @@ export default function App() {
 function Login() {
   const { sign: directRequestId, mobileSign: mobileRequestId, mobileCapture: mobileCaptureRequestId } = getRouteParams();
   return <main className="login"><Card className="loginCard"><ShieldCheck size={46}/><h1>GB Sign</h1><p>Ingresá con Google. Si sos firmante, solo vas a ver los documentos asignados exactamente a tu correo.</p>{(directRequestId || mobileRequestId || mobileCaptureRequestId) && <div className="directLoginNotice"><strong>{mobileCaptureRequestId ? 'Captura de firma desde celular detectada.' : mobileRequestId ? 'Firma desde celular detectada.' : 'Link directo de firma detectado.'}</strong><span>Después de iniciar sesión vas a ir directo al documento si este Google es el mail invitado.</span></div>}<Button onClick={() => signInWithPopup(auth, provider)}>Ingresar con Google</Button></Card></main>;
+}
+
+
+function UserBox({ user, roleLabel, roleTone = 'neutral' }) {
+  const [open, setOpen] = useState(false);
+  async function copyUid() {
+    await navigator.clipboard?.writeText(user.uid);
+  }
+  return <div className="userboxWrap">
+    <button type="button" className="userbox userboxButton" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+      {user.photoURL ? <img src={user.photoURL} alt="" /> : <UserCircle size={30}/>} 
+      <span>{user.displayName || user.email}</span>
+      <Badge tone={roleTone}>{roleLabel}</Badge>
+    </button>
+    {open && <div className="userMenu">
+      <strong>{user.displayName || 'Usuario'}</strong>
+      <small>{normalizeEmail(user.email)}</small>
+      <div className="copyline slim"><code>{user.uid}</code><Button variant="ghost" type="button" onClick={copyUid}><ClipboardCopy size={15}/> Copiar UID</Button></div>
+      <Button variant="ghost" type="button" onClick={() => signOut(auth)}><LogOut size={16}/> Salir</Button>
+    </div>}
+  </div>;
+}
+
+function FocusedSignerPage({ request, user, roleLabel, onClose }) {
+  return <main className="signFocusShell">
+    <header className="signFocusHeader">
+      <div>
+        <h1>Firmar documento</h1>
+        <p>{request.title || request.fileName}</p>
+      </div>
+      <div className="signFocusHeaderActions">
+        <UserBox user={user} roleLabel={roleLabel} roleTone="warn" />
+        <Button variant="ghost" type="button" onClick={onClose}>Volver</Button>
+      </div>
+    </header>
+    <section className="signFocusContent">
+      <PendingDoc request={request} user={user} directOpen focusMode />
+    </section>
+  </main>;
 }
 
 function SignerOnlyNotice({ user }) {
@@ -504,7 +541,7 @@ function DocumentRow({ project, docu, signatures, isAdmin }) {
   }
 
   return <>
-    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions adminActions">
+    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions adminActions">
       <IconAction label="Ver original" onClick={openFile}><ExternalLink size={16}/></IconAction>
       <IconAction label="Links y QR" onClick={() => setShareOpen((v)=>!v)} active={shareOpen}><QrCode size={16}/></IconAction>
       <IconAction label="Campos de firma" onClick={() => setEditFields((v)=>!v)} active={editFields}><PenLine size={16}/></IconAction>
@@ -595,6 +632,10 @@ function mobileSigningLink(requestId) {
 
 function mobileCaptureLink(requestId, sessionId) {
   return buildAppHashLink('mobile-capture', requestId, sessionId);
+}
+
+function signatureDraftId(requestId, uid) {
+  return `${requestId}_${uid}`;
 }
 
 function safeFileName(value = 'documento') {
@@ -937,7 +978,7 @@ function EditSignatureFields({ project, docu, onClose }) {
   </Card></div>;
 }
 
-function PendingDoc({ request, user, directOpen = false }) {
+function PendingDoc({ request, user, directOpen = false, onFocus, focusMode = false }) {
   const [signed, setSigned] = useState(false);
   const [open, setOpen] = useState(Boolean(directOpen));
   const blockRef = useRef(null);
@@ -979,19 +1020,20 @@ function PendingDoc({ request, user, directOpen = false }) {
   }
 
   const statusLabel = signed ? 'Firmado por vos' : 'Pendiente de tu firma';
+  const isOpen = focusMode ? true : open;
 
-  return <div className={`pendingBlock ${directOpen ? 'directTarget' : ''}`} ref={blockRef}>
+  return <div className={`pendingBlock ${directOpen ? 'directTarget' : ''} ${focusMode ? 'focusMode' : ''}`} ref={blockRef}>
     <div className="pending">
       <div>
         <strong>{request.title}</strong>
-        <small>{request.projectName || 'Proyecto'} · {request.fileName}<br/>Hash: {request.sha256}</small>
+        <small>{request.projectName || 'Proyecto'} · {request.fileName}</small>
       </div>
       <div className="actions">
         <Badge tone={signed ? 'good' : 'warn'}>{signed ? <CheckCircle2 size={14}/> : null}{statusLabel}</Badge>
-        <Button onClick={() => setOpen((v)=>!v)}>{open ? 'Cerrar' : signed ? 'Ver estado y descargas' : 'Abrir para firmar'}</Button>
+        {!focusMode && <Button onClick={() => onFocus ? onFocus(request.id) : setOpen((v)=>!v)}>{isOpen ? 'Cerrar' : signed ? 'Ver estado y descargas' : 'Abrir para firmar'}</Button>}
       </div>
     </div>
-    {open && <Card className="signerStatusCard">
+    {isOpen && <Card className="signerStatusCard">
       <SignatureStatusPanel docu={docu || request} currentEmail={user.email}/>
       {signed && <div className="actions signerDownloads">
         <Button variant="ghost" onClick={() => downloadArtifact('signed')} disabled={downloadBusy === 'signed'}>
@@ -1002,7 +1044,7 @@ function PendingDoc({ request, user, directOpen = false }) {
         </Button>
       </div>}
     </Card>}
-    {open && !signed && <SigningRoom request={request} user={user} docu={docu}/>} 
+    {isOpen && !signed && <SigningRoom request={request} user={user} docu={docu}/>} 
   </div>;
 }
 
@@ -1091,7 +1133,7 @@ function MobileSignatureCaptureOnly({ request, sessionId, user }) {
     if (!signatureImage) { alert('Dibujá tu firma con el dedo antes de enviarla.'); return; }
     setBusy(true);
     try {
-      await setDoc(doc(db, 'mobileSignatureCaptures', sessionId), {
+      const payload = {
         requestId: request.id,
         projectId: request.projectId,
         docId: request.docId,
@@ -1102,7 +1144,9 @@ function MobileSignatureCaptureOnly({ request, sessionId, user }) {
         status: 'ready',
         updatedAt: serverTimestamp(),
         updatedAtIso: new Date().toISOString(),
-      }, { merge: true });
+      };
+      await setDoc(doc(db, 'mobileSignatureCaptures', sessionId), payload, { merge: true });
+      await setDoc(doc(db, 'signatureDrafts', signatureDraftId(request.id, user.uid)), payload, { merge: true });
       setSent(true);
     } catch (err) {
       console.error(err);
@@ -1251,7 +1295,8 @@ function SigningRoom({ request, user, docu }) {
       createdAtIso: new Date().toISOString(),
       updatedAt: serverTimestamp(),
     }, { merge: true }).catch((err) => console.warn('No se pudo crear sesión mobile:', err.message));
-    return onSnapshot(captureRef, (snap) => {
+    const draftRef = doc(db, 'signatureDrafts', signatureDraftId(request.id, user.uid));
+    const unsubLegacy = onSnapshot(captureRef, (snap) => {
       const data = snap.data() || {};
       if (data.status === 'ready' && data.signatureImage) {
         setSignatureMode('drawn');
@@ -1259,6 +1304,15 @@ function SigningRoom({ request, user, docu }) {
         setMobileSignatureReceived(true);
       }
     }, (err) => console.warn('No se pudo escuchar firma mobile:', err.message));
+    const unsubDraft = onSnapshot(draftRef, (snap) => {
+      const data = snap.data() || {};
+      if (data.status === 'ready' && data.signatureImage) {
+        setSignatureMode('drawn');
+        setSignatureImage(data.signatureImage);
+        setMobileSignatureReceived(true);
+      }
+    }, (err) => console.warn('No se pudo escuchar borrador mobile:', err.message));
+    return () => { unsubLegacy(); unsubDraft(); };
   }, [captureSessionId, request.id, request.projectId, request.docId, user.uid, user.email]);
 
 
@@ -1603,14 +1657,15 @@ function normalizeDni(value) {
 function SignaturePad({ onChange }) {
   const canvasRef = useRef(null);
   const drawingRef = useRef(false);
+  const hasInkRef = useRef(false);
   const [empty, setEmpty] = useState(true);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    canvas.width = Math.floor(rect.width * dpr);
-    canvas.height = Math.floor(rect.height * dpr);
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     ctx.lineCap = 'round';
@@ -1620,35 +1675,46 @@ function SignaturePad({ onChange }) {
   }, []);
 
   function pos(ev) {
-    const point = ev.touches?.[0] || ev;
     const rect = canvasRef.current.getBoundingClientRect();
-    return { x: point.clientX - rect.left, y: point.clientY - rect.top };
+    return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
   }
 
   function begin(ev) {
     ev.preventDefault();
+    ev.stopPropagation();
+    ev.currentTarget.setPointerCapture?.(ev.pointerId);
     drawingRef.current = true;
     const ctx = canvasRef.current.getContext('2d');
     const p = pos(ev);
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + 0.01, p.y + 0.01);
+    ctx.stroke();
+    hasInkRef.current = true;
+    setEmpty(false);
+    onChange(canvasRef.current.toDataURL('image/png'));
   }
 
   function move(ev) {
     if (!drawingRef.current) return;
     ev.preventDefault();
+    ev.stopPropagation();
     const ctx = canvasRef.current.getContext('2d');
     const p = pos(ev);
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
+    hasInkRef.current = true;
     setEmpty(false);
     onChange(canvasRef.current.toDataURL('image/png'));
   }
 
-  function end() {
+  function end(ev) {
     if (!drawingRef.current) return;
+    ev?.preventDefault?.();
+    ev?.stopPropagation?.();
+    ev?.currentTarget?.releasePointerCapture?.(ev.pointerId);
     drawingRef.current = false;
-    if (!empty) onChange(canvasRef.current.toDataURL('image/png'));
+    if (hasInkRef.current) onChange(canvasRef.current.toDataURL('image/png'));
   }
 
   function clear() {
@@ -1656,11 +1722,24 @@ function SignaturePad({ onChange }) {
     const rect = canvas.getBoundingClientRect();
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, rect.width, rect.height);
+    hasInkRef.current = false;
     setEmpty(true);
     onChange('');
   }
 
-  return <div className="padWrap"><canvas ref={canvasRef} className="signaturePad" onMouseDown={begin} onMouseMove={move} onMouseUp={end} onMouseLeave={end} onTouchStart={begin} onTouchMove={move} onTouchEnd={end}/><Button variant="ghost" type="button" onClick={clear}>Limpiar firma</Button></div>;
+  return <div className="padWrap" onContextMenu={(e) => e.preventDefault()} onSelectStart={(e) => e.preventDefault()}>
+    <canvas
+      ref={canvasRef}
+      className="signaturePad"
+      draggable="false"
+      onPointerDown={begin}
+      onPointerMove={move}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onPointerLeave={end}
+    />
+    <Button variant="ghost" type="button" onClick={clear}>Limpiar firma</Button>
+  </div>;
 }
 
 function useObjectUrl(file) {
