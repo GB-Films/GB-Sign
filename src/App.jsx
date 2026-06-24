@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import {
   addDoc, collection, doc, onSnapshot, orderBy, query,
   serverTimestamp, setDoc, updateDoc, where, writeBatch
@@ -7,8 +8,8 @@ import { httpsCallable } from 'firebase/functions';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
-  CheckCircle2, ClipboardCopy, Download, FileSignature, FolderPlus,
-  LockKeyhole, LogOut, PenLine, Settings, ShieldCheck, Trash2, Upload, Users
+  CheckCircle2, ClipboardCopy, Download, ExternalLink, FileSignature, FolderPlus,
+  LockKeyhole, LogOut, Mail, PenLine, QrCode, Settings, ShieldCheck, Trash2, Upload, Users
 } from 'lucide-react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { auth, db, provider, storage, functions } from './firebase';
@@ -70,6 +71,13 @@ export default function App() {
   const [documents, setDocuments] = useState([]);
   const [pending, setPending] = useState([]);
   const [signaturesByDoc, setSignaturesByDoc] = useState({});
+  const [directRequestId, setDirectRequestId] = useState(() => new URLSearchParams(window.location.search).get('sign') || '');
+
+  useEffect(() => {
+    const onPop = () => setDirectRequestId(new URLSearchParams(window.location.search).get('sign') || '');
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -146,7 +154,8 @@ export default function App() {
         <Card>
           <div className="cardHead"><h2>Documentos para firmar</h2><FileSignature size={22}/></div>
           <div className="list">
-            {pending.map((d) => <PendingDoc key={d.id} request={d} user={user}/>) }
+            {directRequestId && pending.length > 0 && !pending.some((d) => d.id === directRequestId) && <div className="directLinkWarning"><strong>Link de firma detectado.</strong><span>No encontramos ese documento para este mail. Verificá que hayas ingresado con el Google exacto que fue invitado a firmar.</span></div>}
+            {pending.map((d) => <PendingDoc key={d.id} request={d} user={user} directOpen={directRequestId === d.id}/>) }
             {!pending.length && <Empty title="Sin documentos asignados">Cuando pidan una firma con este mail de Google, el documento aparecerá acá.</Empty>}
           </div>
         </Card>
@@ -158,7 +167,8 @@ export default function App() {
 }
 
 function Login() {
-  return <main className="login"><Card className="loginCard"><ShieldCheck size={46}/><h1>GB Sign</h1><p>Ingresá con Google. Si sos firmante, solo vas a ver los documentos asignados exactamente a tu correo.</p><Button onClick={() => signInWithPopup(auth, provider)}>Ingresar con Google</Button></Card></main>;
+  const directRequestId = new URLSearchParams(window.location.search).get('sign') || '';
+  return <main className="login"><Card className="loginCard"><ShieldCheck size={46}/><h1>GB Sign</h1><p>Ingresá con Google. Si sos firmante, solo vas a ver los documentos asignados exactamente a tu correo.</p>{directRequestId && <div className="directLoginNotice"><strong>Link directo de firma detectado.</strong><span>Después de iniciar sesión vas a ir directo al documento si este Google es el mail invitado.</span></div>}<Button onClick={() => signInWithPopup(auth, provider)}>Ingresar con Google</Button></Card></main>;
 }
 
 function SignerOnlyNotice({ user }) {
@@ -342,6 +352,7 @@ function DocumentRow({ project, docu, signatures, isAdmin }) {
   const [busy, setBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState('');
   const [editFields, setEditFields] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [deletingDoc, setDeletingDoc] = useState(false);
   const tone = statusFor(docu, signatures) === 'Completo' ? 'good' : 'warn';
   const isPdf = (docu.contentType || '').includes('pdf') || /\.pdf$/i.test(docu.fileName || '');
@@ -436,9 +447,77 @@ function DocumentRow({ project, docu, signatures, isAdmin }) {
   }
 
   return <>
-    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado servidor'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado servidor'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{isAdmin && <Button variant="danger" onClick={deleteDocument} disabled={deletingDoc}><Trash2 size={16}/>{deletingDoc ? 'Borrando...' : 'Borrar'}</Button>}{url && <a href={url}>link</a>}</span></div>
+    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setShareOpen((v)=>!v)}><QrCode size={16}/> Links / QR</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado servidor'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado servidor'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{isAdmin && <Button variant="danger" onClick={deleteDocument} disabled={deletingDoc}><Trash2 size={16}/>{deletingDoc ? 'Borrando...' : 'Borrar'}</Button>}{url && <a href={url}>link</a>}</span></div>
+    {shareOpen && <SignatureSharePanel project={project} docu={docu}/>}
     {editFields && <EditSignatureFields project={project} docu={docu} onClose={() => setEditFields(false)}/>} 
   </>;
+}
+
+
+function SignatureSharePanel({ project, docu }) {
+  const signerEmails = [...new Set((docu.signerEmails || []).map(normalizeEmail).filter(Boolean))];
+  if (!signerEmails.length) return <div className="editorRow"><Card><p className="muted">Este documento no tiene firmantes externos asignados.</p></Card></div>;
+  return <div className="editorRow"><Card className="sharePanel">
+    <div className="cardHead"><h3>Compartir link directo de firma</h3><QrCode size={22}/></div>
+    <p className="muted">Cada link es específico para un mail. El firmante entra, inicia sesión con ese Google y va directo al documento. El QR permite firmar desde celular con el dedo.</p>
+    <div className="shareGrid">
+      {signerEmails.map((email) => <SignatureShareRow key={email} project={project} docu={docu} email={email}/>) }
+    </div>
+  </Card></div>;
+}
+
+function SignatureShareRow({ project, docu, email }) {
+  const [copied, setCopied] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const requestId = signatureRequestId(project.id, docu.id, email);
+  const link = signingLink(requestId);
+  const subject = `Firma solicitada: ${docu.title || docu.fileName || 'documento'}`;
+  const body = `Hola,\n\nTe comparto el link directo para revisar y firmar el documento \"${docu.title || docu.fileName || 'documento'}\" en GB Sign.\n\nTenés que ingresar con este mail de Google: ${email}\n\nLink de firma:\n${link}\n\nGracias.`;
+  const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    QRCode.toDataURL(link, { margin: 1, width: 180, errorCorrectionLevel: 'M' })
+      .then((url) => { if (!cancelled) setQrDataUrl(url); })
+      .catch((err) => console.warn('No se pudo generar QR:', err.message));
+    return () => { cancelled = true; };
+  }, [link]);
+
+  async function copyLink() {
+    await navigator.clipboard?.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1400);
+  }
+
+  async function downloadQr() {
+    if (!qrDataUrl) return;
+    const res = await fetch(qrDataUrl);
+    const blob = await res.blob();
+    downloadBytes(`qr-firma-${safeFileName(docu.title)}-${emailKey(email)}.png`, blob, 'image/png');
+  }
+
+  return <div className="shareRow">
+    <div className="shareInfo">
+      <strong>{email}</strong>
+      <input value={link} readOnly onFocus={(e) => e.currentTarget.select()}/>
+      <div className="actions">
+        <Button type="button" variant="ghost" onClick={copyLink}><ClipboardCopy size={16}/>{copied ? 'Copiado' : 'Copiar link'}</Button>
+        <a className="btn ghost" href={mailto}><Mail size={16}/> Armar email</a>
+        <a className="btn ghost" href={link} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Abrir</a>
+      </div>
+    </div>
+    <div className="qrBox">
+      {qrDataUrl ? <img src={qrDataUrl} alt={`QR de firma para ${email}`}/> : <span>Generando QR...</span>}
+      <Button type="button" variant="ghost" onClick={downloadQr} disabled={!qrDataUrl}><Download size={16}/> Descargar QR</Button>
+    </div>
+  </div>;
+}
+
+function signingLink(requestId) {
+  const base = import.meta.env.BASE_URL || '/';
+  const url = new URL(base, window.location.origin);
+  url.searchParams.set('sign', requestId);
+  return url.toString();
 }
 
 function safeFileName(value = 'documento') {
@@ -778,11 +857,19 @@ function EditSignatureFields({ project, docu, onClose }) {
   </Card></div>;
 }
 
-function PendingDoc({ request, user }) {
+function PendingDoc({ request, user, directOpen = false }) {
   const [signed, setSigned] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(Boolean(directOpen));
+  const blockRef = useRef(null);
   const [docu, setDocu] = useState(null);
   const [downloadBusy, setDownloadBusy] = useState('');
+
+  useEffect(() => {
+    if (directOpen) {
+      setOpen(true);
+      setTimeout(() => blockRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }), 200);
+    }
+  }, [directOpen]);
 
   useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid), (snap) => setSigned(snap.exists()),
     (err) => console.warn('No se pudo cargar estado de firma:', err.message)), [request.projectId, request.docId, user.uid]);
@@ -813,7 +900,7 @@ function PendingDoc({ request, user }) {
 
   const statusLabel = signed ? 'Firmado por vos' : 'Pendiente de tu firma';
 
-  return <div className="pendingBlock">
+  return <div className={`pendingBlock ${directOpen ? 'directTarget' : ''}`} ref={blockRef}>
     <div className="pending">
       <div>
         <strong>{request.title}</strong>

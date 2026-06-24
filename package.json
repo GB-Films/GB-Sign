@@ -18,7 +18,8 @@
     "react-dom": "latest",
     "firebase": "latest",
     "lucide-react": "latest",
-    "pdf-lib": "latest"
+    "pdf-lib": "latest",
+    "qrcode": "latest"
   },
   "devDependencies": {}
 }
