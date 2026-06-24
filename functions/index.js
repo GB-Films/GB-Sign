@@ -13,8 +13,10 @@ const db = getFirestore();
 const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'gb-sign-e1776.firebasestorage.app';
 const bucket = getStorage().bucket(bucketName);
 
-const MIN_SIGNATURE_BOX_W_PT = 250;
-const MIN_SIGNATURE_BOX_H_PT = 95;
+const MIN_SIGNATURE_BOX_W_PT = 165;
+const MIN_SIGNATURE_BOX_H_PT = 58;
+const MAX_SIGNATURE_BOX_W_PT = 230;
+const MAX_SIGNATURE_BOX_H_PT = 80;
 
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
@@ -407,10 +409,14 @@ async function loadPdfFonts(pdfDoc) {
 
 async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const { width, height } = page.getSize();
-  const boxW = Math.min(width - 24, Math.max(MIN_SIGNATURE_BOX_W_PT, Number(field.w || 0.2) * width));
-  const boxH = Math.min(height - 24, Math.max(MIN_SIGNATURE_BOX_H_PT, Number(field.h || 0.08) * height));
-  const rawX = Number(field.x || 0) * width;
-  const rawY = height - (Number(field.y || 0) * height) - boxH;
+  const fieldW = Math.max(1, Number(field.w || 0.28) * width);
+  const fieldH = Math.max(1, Number(field.h || 0.075) * height);
+  const boxW = Math.min(width - 24, Math.max(MIN_SIGNATURE_BOX_W_PT, Math.min(fieldW, MAX_SIGNATURE_BOX_W_PT)));
+  const boxH = Math.min(height - 24, Math.max(MIN_SIGNATURE_BOX_H_PT, Math.min(fieldH, MAX_SIGNATURE_BOX_H_PT)));
+  const fieldX = Number(field.x || 0) * width;
+  const fieldY = height - (Number(field.y || 0) * height) - fieldH;
+  const rawX = fieldX + Math.max(0, (fieldW - boxW) / 2);
+  const rawY = fieldY + Math.max(0, (fieldH - boxH) / 2);
   const x = Math.max(12, Math.min(width - boxW - 12, rawX));
   const y = Math.max(12, Math.min(height - boxH - 12, rawY));
   const pad = Math.max(4, Math.min(8, boxH * 0.10));
@@ -591,7 +597,7 @@ function getIp(request) {
 }
 function sha256(bytes) { return createHash('sha256').update(Buffer.from(bytes)).digest('hex'); }
 function dataUrlToBuffer(dataUrl = '') { return Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'); }
-function fitImage(image, maxWidth, maxHeight) { const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1); return { width: image.width * scale, height: image.height * scale }; }
+function fitImage(image, maxWidth, maxHeight) { const scale = Math.min(maxWidth / image.width, maxHeight / image.height); return { width: image.width * scale, height: image.height * scale }; }
 function signedAtDate(sig) { return sig?.signedAt?.toDate ? sig.signedAt.toDate() : sig?.signedAtIso ? new Date(sig.signedAtIso) : sig?.signedAt ? new Date(sig.signedAt) : null; }
 function signedAtText(sig) { const d = signedAtDate(sig); if (!d || Number.isNaN(d.getTime())) return 'Fecha no disponible'; return new Intl.DateTimeFormat('es-AR', { dateStyle: 'full', timeStyle: 'long', timeZone: 'America/Argentina/Buenos_Aires' }).format(d) + ' (Argentina)'; }
 function compactDate(sig) { const d = signedAtDate(sig); if (!d || Number.isNaN(d.getTime())) return 'fecha no disponible'; return new Intl.DateTimeFormat('es-AR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Argentina/Buenos_Aires' }).format(d); }

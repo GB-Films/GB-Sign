@@ -19,8 +19,10 @@ import {
   sha256Bytes, sha256File, signatureRequestId, statusFor
 } from './utils.js';
 
-const MIN_SIGNATURE_FIELD_W = 0.42;
-const MIN_SIGNATURE_FIELD_H = 0.12;
+const MIN_SIGNATURE_FIELD_W = 0.28;
+const MIN_SIGNATURE_FIELD_H = 0.075;
+const MAX_SIGNATURE_FIELD_VISUAL_W = 0.32;
+const MAX_SIGNATURE_FIELD_VISUAL_H = 0.095;
 
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
@@ -712,7 +714,7 @@ function dataUrlToBytes(dataUrl = '') {
 }
 
 function fitImage(image, maxWidth, maxHeight) {
-  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+  const scale = Math.min(maxWidth / image.width, maxHeight / image.height);
   return { width: image.width * scale, height: image.height * scale };
 }
 
@@ -781,10 +783,14 @@ async function loadPdfFonts(pdfDoc) {
 
 async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const { width, height } = page.getSize();
-  const boxW = Math.min(width - 24, Math.max(250, Number(field.w || 0.2) * width));
-  const boxH = Math.min(height - 24, Math.max(95, Number(field.h || 0.08) * height));
-  const rawX = Number(field.x || 0) * width;
-  const rawY = height - (Number(field.y || 0) * height) - boxH;
+  const fieldW = Math.max(1, Number(field.w || 0.28) * width);
+  const fieldH = Math.max(1, Number(field.h || 0.075) * height);
+  const boxW = Math.min(width - 24, Math.max(165, Math.min(fieldW, 230)));
+  const boxH = Math.min(height - 24, Math.max(58, Math.min(fieldH, 80)));
+  const fieldX = Number(field.x || 0) * width;
+  const fieldY = height - (Number(field.y || 0) * height) - fieldH;
+  const rawX = fieldX + Math.max(0, (fieldW - boxW) / 2);
+  const rawY = fieldY + Math.max(0, (fieldH - boxH) / 2);
   const x = Math.max(12, Math.min(width - boxW - 12, rawX));
   const y = Math.max(12, Math.min(height - boxH - 12, rawY));
   const pad = Math.max(4, Math.min(8, boxH * 0.10));
@@ -1109,7 +1115,7 @@ function MobileCaptureRoute({ requestId, sessionId, pending, user }) {
   return <main className="mobileSignShell"><MobileSignatureCaptureOnly request={request} sessionId={sessionId} user={user}/></main>;
 }
 
-function MobileQrPrompt({ link, received = false }) {
+function MobileQrPrompt({ link, received = false, signatureImage = "" }) {
   const [qrDataUrl, setQrDataUrl] = useState('');
   useEffect(() => {
     let cancelled = false;
@@ -1119,8 +1125,8 @@ function MobileQrPrompt({ link, received = false }) {
     return () => { cancelled = true; };
   }, [link]);
   return <div className={`mobileQrPrompt ${received ? 'done' : ''}`}>
-    <div><strong><Smartphone size={16}/> Dibujar firma con el celular</strong><span>{received ? 'Firma recibida. Volvé a la computadora para revisar el documento y confirmar.' : 'Este QR solo sirve para dibujar la firma con el dedo. La confirmación final sigue en esta computadora.'}</span></div>
-    {received ? <Badge tone="good">Firma recibida</Badge> : qrDataUrl ? <img src={qrDataUrl} alt="QR para dibujar firma desde celular"/> : <span className="muted">Generando QR...</span>}
+    <div><strong><Smartphone size={16}/> Dibujar firma con el celular</strong><span>{received ? 'Firma recibida y cargada en esta computadora. Ahora presioná el recuadro de firma, completá lo faltante y confirmá.' : 'Este QR solo sirve para dibujar la firma con el dedo. La confirmación final sigue en esta computadora.'}</span></div>
+    {received ? <div className="mobileQrSignatureThumb">{signatureImage ? <img src={signatureImage} alt="Firma recibida"/> : <CheckCircle2 size={24}/>}<span>Firma cargada</span></div> : qrDataUrl ? <img src={qrDataUrl} alt="QR para dibujar firma desde celular"/> : <span className="muted">Generando QR...</span>}
   </div>;
 }
 
@@ -1154,7 +1160,7 @@ function MobileSignatureCaptureOnly({ request, sessionId, user }) {
     } finally { setBusy(false); }
   }
 
-  if (sent) return <Card className="mobileSignCard success"><CheckCircle2 size={46}/><h1>Firma enviada</h1><p>Volvé a la computadora. El dibujo de tu firma ya debería aparecer ahí para continuar la firma electrónica.</p><small>{request.title || request.fileName}</small></Card>;
+  if (sent) return <Card className="mobileSignCard success"><CheckCircle2 size={46}/><h1>Firma enviada</h1>{signatureImage && <div className="sentSignaturePreview"><img src={signatureImage} alt="Firma enviada"/></div>}<p>Listo: tu firma ya quedó cargada en la computadora. Volvé a la PC, presioná el recuadro del documento, completá DNI/consentimiento y confirmá.</p><small>{request.title || request.fileName}</small></Card>;
 
   return <Card className="mobileSignCard captureOnlyCard">
     <div className="mobileSignTop"><Smartphone size={34}/><div><h1>Dibujar firma</h1><p>{request.title || request.fileName || 'Documento'}</p></div></div>
@@ -1174,6 +1180,7 @@ function MobileFullSigningRoom({ request, user }) {
   const [typedName, setTypedName] = useState(user.displayName || '');
   const [signatureImage, setSignatureImage] = useState('');
   const [mobileSignatureReceived, setMobileSignatureReceived] = useState(false);
+  const [signatureEditorOpen, setSignatureEditorOpen] = useState(true);
   const [dni, setDni] = useState('');
   const [dniConfirmed, setDniConfirmed] = useState(false);
   const [consent, setConsent] = useState(false);
@@ -1267,6 +1274,7 @@ function SigningRoom({ request, user, docu }) {
   const [typedName, setTypedName] = useState(user.displayName || '');
   const [signatureImage, setSignatureImage] = useState('');
   const [mobileSignatureReceived, setMobileSignatureReceived] = useState(false);
+  const [signatureEditorOpen, setSignatureEditorOpen] = useState(true);
   const [dni, setDni] = useState('');
   const [dniConfirmed, setDniConfirmed] = useState(false);
   const [consent, setConsent] = useState(false);
@@ -1302,6 +1310,7 @@ function SigningRoom({ request, user, docu }) {
         setSignatureMode('drawn');
         setSignatureImage(data.signatureImage);
         setMobileSignatureReceived(true);
+        setSignatureEditorOpen(false);
       }
     }, (err) => console.warn('No se pudo escuchar firma mobile:', err.message));
     const unsubDraft = onSnapshot(draftRef, (snap) => {
@@ -1310,6 +1319,7 @@ function SigningRoom({ request, user, docu }) {
         setSignatureMode('drawn');
         setSignatureImage(data.signatureImage);
         setMobileSignatureReceived(true);
+        setSignatureEditorOpen(false);
       }
     }, (err) => console.warn('No se pudo escuchar borrador mobile:', err.message));
     return () => { unsubLegacy(); unsubDraft(); };
@@ -1357,10 +1367,15 @@ function SigningRoom({ request, user, docu }) {
   }
 
 
+  const hasDrawnSignature = signatureMode === 'drawn' && Boolean(signatureImage);
+  const hasTypedSignature = signatureMode === 'typed' && Boolean(typedName.trim());
+  const hasSignatureDraft = hasDrawnSignature || hasTypedSignature;
+  const stepDone = fieldClicked;
+
   return <Card className="signingRoom">
-    <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone="warn">Firma electrónica</Badge></div>
-    <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso obligatorio: presioná el recuadro naranja de firma'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : 'Para dejar constancia de intención, tocá/clickeá el recuadro asignado dentro del documento antes de avanzar.'}</span></div>
-    <MobileQrPrompt link={mobileLink} received={mobileSignatureReceived} />
+    <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone={hasSignatureDraft ? 'good' : 'warn'}>{hasSignatureDraft ? 'Firma lista' : 'Firma electrónica'}</Badge></div>
+    <div className={`signStepNotice ${stepDone ? 'done' : hasSignatureDraft ? 'attention' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : hasSignatureDraft ? 'Firma dibujada: falta seleccionar el recuadro' : 'Paso obligatorio: presioná el recuadro naranja de firma'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : hasSignatureDraft ? 'El dibujo de la firma ya quedó cargado. Ahora clickeá el recuadro asignado dentro del documento para vincularla a ese campo.' : 'Para dejar constancia de intención, tocá/clickeá el recuadro asignado dentro del documento antes de avanzar.'}</span></div>
+    <MobileQrPrompt link={mobileLink} received={mobileSignatureReceived} signatureImage={signatureMode === 'drawn' ? signatureImage : ''} />
     {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
     <div className="grid two signControls">
       <Card>
@@ -1374,8 +1389,15 @@ function SigningRoom({ request, user, docu }) {
       </Card>
       <Card className="wideCard">
         <h3>Tu firma</h3>
-        <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
-        {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
+        {hasSignatureDraft && !signatureEditorOpen ? <div className="signatureReadyCard">
+          <div className="signatureReadyPreview">{hasDrawnSignature ? <img src={signatureImage} alt="Firma cargada"/> : <span>{typedName.trim()}</span>}</div>
+          <div><strong>Firma lista</strong><p>{mobileSignatureReceived ? 'Recibimos el dibujo desde el celular y ya quedó cargado en esta computadora.' : 'La firma ya quedó cargada para este documento.'}</p><small>Ahora presioná el recuadro naranja del documento, completá DNI/consentimiento y confirmá.</small></div>
+          <div className="actions"><Button variant="ghost" type="button" onClick={() => setSignatureEditorOpen(true)}>Modificar firma</Button></div>
+        </div> : <>
+          <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
+          {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
+          {hasSignatureDraft && <div className="actions"><Button variant="ghost" type="button" onClick={() => setSignatureEditorOpen(false)}>Usar esta firma</Button></div>}
+        </>}
       </Card>
     </div>
     <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
@@ -1637,13 +1659,21 @@ function SignaturePageOverlay({ pageNumber, fields, activeFieldId, onSelectField
         <span>{f.label || f.signerEmail}</span>
       </button>
     )}
-    {pageSignatures.map((sig) => <div key={sig.field.id} className="signatureVisual" style={rectStyle(sig.field)}>{sig.type === 'drawn' ? <img src={sig.image} alt="Firma"/> : <span>{sig.typedName}</span>}</div>)}
+    {pageSignatures.map((sig) => <div key={sig.field.id} className="signatureVisual" style={signatureVisualRectStyle(sig.field)}>{sig.type === 'drawn' ? <img src={sig.image} alt="Firma"/> : <span>{sig.typedName}</span>}</div>)}
     {pageDraft && <div className="signatureRect draft" style={rectStyle(pageDraft)}><span>Nuevo campo · mínimo recomendado</span></div>}
   </div>;
 }
 
 function rectStyle(f) {
   return { left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` };
+}
+
+function signatureVisualRectStyle(f) {
+  const w = Math.min(Number(f.w || 0), MAX_SIGNATURE_FIELD_VISUAL_W);
+  const h = Math.min(Number(f.h || 0), MAX_SIGNATURE_FIELD_VISUAL_H);
+  const x = Number(f.x || 0) + Math.max(0, (Number(f.w || 0) - w) / 2);
+  const y = Number(f.y || 0) + Math.max(0, (Number(f.h || 0) - h) / 2);
+  return { left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` };
 }
 
 function round(value) {
@@ -1679,6 +1709,12 @@ function SignaturePad({ onChange }) {
     return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
   }
 
+  function currentDataUrl({ cropped = false } = {}) {
+    const canvas = canvasRef.current;
+    if (!canvas) return '';
+    return cropped ? cropCanvasToInk(canvas) : canvas.toDataURL('image/png');
+  }
+
   function begin(ev) {
     ev.preventDefault();
     ev.stopPropagation();
@@ -1692,7 +1728,7 @@ function SignaturePad({ onChange }) {
     ctx.stroke();
     hasInkRef.current = true;
     setEmpty(false);
-    onChange(canvasRef.current.toDataURL('image/png'));
+    onChange(currentDataUrl());
   }
 
   function move(ev) {
@@ -1705,7 +1741,7 @@ function SignaturePad({ onChange }) {
     ctx.stroke();
     hasInkRef.current = true;
     setEmpty(false);
-    onChange(canvasRef.current.toDataURL('image/png'));
+    onChange(currentDataUrl());
   }
 
   function end(ev) {
@@ -1714,14 +1750,16 @@ function SignaturePad({ onChange }) {
     ev?.stopPropagation?.();
     ev?.currentTarget?.releasePointerCapture?.(ev.pointerId);
     drawingRef.current = false;
-    if (hasInkRef.current) onChange(canvasRef.current.toDataURL('image/png'));
+    if (hasInkRef.current) onChange(currentDataUrl({ cropped: true }));
   }
 
   function clear() {
     const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
     const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
     hasInkRef.current = false;
     setEmpty(true);
     onChange('');
@@ -1740,6 +1778,42 @@ function SignaturePad({ onChange }) {
     />
     <Button variant="ghost" type="button" onClick={clear}>Limpiar firma</Button>
   </div>;
+}
+
+function cropCanvasToInk(canvas) {
+  const ctx = canvas.getContext('2d');
+  const { width, height } = canvas;
+  const image = ctx.getImageData(0, 0, width, height);
+  const data = image.data;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const alpha = data[i + 3];
+      if (alpha > 8) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) return canvas.toDataURL('image/png');
+  const pad = Math.max(12, Math.round(Math.max(maxX - minX, maxY - minY) * 0.18));
+  minX = Math.max(0, minX - pad);
+  minY = Math.max(0, minY - pad);
+  maxX = Math.min(width - 1, maxX + pad);
+  maxY = Math.min(height - 1, maxY + pad);
+  const cropW = Math.max(1, maxX - minX + 1);
+  const cropH = Math.max(1, maxY - minY + 1);
+  const out = document.createElement('canvas');
+  out.width = cropW;
+  out.height = cropH;
+  out.getContext('2d').drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+  return out.toDataURL('image/png');
 }
 
 function useObjectUrl(file) {
