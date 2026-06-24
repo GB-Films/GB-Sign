@@ -444,3 +444,10 @@ Campos principales:
   "evidenceVersion": "server-v1"
 }
 ```
+
+
+## Cambio: estado visible para firmantes y descargas
+
+Los firmantes externos ahora pueden abrir un documento asignado y ver el estado de todos los firmantes: quién ya firmó y quién sigue pendiente. Cuando el usuario ya firmó, la pantalla de firmante muestra botones para descargar el PDF firmado generado en servidor y el certificado PDF de evidencia.
+
+El botón manual **Activar firmantes** fue removido del flujo principal porque ya no debería usarse normalmente: las solicitudes se crean automáticamente al cargar el documento y se actualizan al guardar campos de firma.

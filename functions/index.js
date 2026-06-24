@@ -64,6 +64,28 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
     const field = (docu.signatureFields || []).find((f) => String(f.id || '') === fieldId && normalizeEmail(f.signerEmail || '') === auth.email);
     if (!field) throw new HttpsError('permission-denied', 'El campo de firma no corresponde a este firmante.');
 
+    const existingPublicStatus = Array.isArray(docu.signatureStatus) ? docu.signatureStatus : [];
+    const byEmail = new Map(existingPublicStatus.map((item) => [normalizeEmail(item.email || item.signerEmail || ''), item]));
+    const publicSignatureStatus = signerEmails.map((email) => {
+      const previous = byEmail.get(email) || {};
+      if (email === auth.email) {
+        return {
+          email,
+          status: 'signed',
+          displayName: auth.name || '',
+          signedAtIso: signedAt.toISOString(),
+          signedByUid: auth.uid,
+        };
+      }
+      return {
+        email,
+        status: previous.status === 'signed' ? 'signed' : 'pending',
+        displayName: previous.displayName || previous.signedByName || '',
+        signedAtIso: previous.signedAtIso || '',
+        signedByUid: previous.signedByUid || '',
+      };
+    });
+
     const signaturePayload = {
       uid: auth.uid,
       email: auth.email,
@@ -101,10 +123,13 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
       signedAt: FieldValue.serverTimestamp(),
       signedAtIso: signedAt.toISOString(),
       signedByUid: auth.uid,
+      signedByEmail: auth.email,
+      signedByName: auth.name || '',
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     tx.update(docRef, {
       lastSignatureAt: FieldValue.serverTimestamp(),
+      signatureStatus: publicSignatureStatus,
       updatedAt: FieldValue.serverTimestamp(),
       evidenceVersion: 'server-v1',
     });
@@ -193,10 +218,28 @@ async function generateArtifacts(projectId, docId, context) {
 
   const signedEmails = signatures.map((s) => normalizeEmail(s.email));
   const signerEmails = (docu.signerEmails || []).map(normalizeEmail);
+  const signatureByEmail = new Map(signatures.map((s) => [normalizeEmail(s.email), s]));
+  const publicSignatureStatus = signerEmails.map((email) => {
+    const sig = signatureByEmail.get(email);
+    return sig ? {
+      email,
+      status: 'signed',
+      displayName: sig.displayName || '',
+      signedAtIso: sig.signedAtIso || '',
+      signedByUid: sig.uid || sig.authUid || '',
+    } : {
+      email,
+      status: 'pending',
+      displayName: '',
+      signedAtIso: '',
+      signedByUid: '',
+    };
+  });
   const allSigned = signerEmails.length > 0 && signerEmails.every((e) => signedEmails.includes(e));
 
   await docRef.set({
     status: allSigned ? 'completed' : 'partially_signed',
+    signatureStatus: publicSignatureStatus,
     serverArtifacts: {
       signedPdfPath,
       certificatePdfPath,

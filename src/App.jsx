@@ -234,6 +234,7 @@ async function createSignatureRequests(project, docu) {
       storagePath: docu.storagePath || '',
       sha256: docu.sha256,
       signerEmail: normalized,
+      allSignerEmails: signerEmails.map(normalizeEmail),
       signatureFields,
       requestedByUid: auth.currentUser.uid,
       requestedByEmail: normalizeEmail(auth.currentUser.email),
@@ -267,9 +268,15 @@ function UploadDocument({ project }) {
     setBusy(true);
     try {
       const hash = await sha256File(file);
+      const initialSignatureStatus = signerEmails.map((email) => ({
+        email: normalizeEmail(email),
+        status: 'pending',
+        displayName: '',
+        signedAtIso: '',
+      }));
       const docRef = await addDoc(collection(db, 'projects', project.id, 'documents'), {
         title: title.trim(), fileName: file.name, contentType: file.type || 'application/octet-stream', size: file.size,
-        sha256: hash, signerEmails, signatureFields, uploadedByUid: auth.currentUser.uid, uploadedByEmail: normalizeEmail(auth.currentUser.email),
+        sha256: hash, signerEmails, signatureFields, signatureStatus: initialSignatureStatus, uploadedByUid: auth.currentUser.uid, uploadedByEmail: normalizeEmail(auth.currentUser.email),
         createdAt: serverTimestamp(), updatedAt: serverTimestamp()
       });
       const storagePath = `projects/${project.id}/documents/${docRef.id}/${file.name}`;
@@ -397,7 +404,7 @@ function DocumentRow({ project, docu, signatures }) {
   }
 
   return <>
-    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={syncRequests} disabled={busy}>{busy ? 'Activando...' : 'Activar firmantes'}</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado servidor'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado servidor'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{url && <a href={url}>link</a>}</span></div>
+    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado servidor'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado servidor'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{url && <a href={url}>link</a>}</span></div>
     {editFields && <EditSignatureFields project={project} docu={docu} onClose={() => setEditFields(false)}/>} 
   </>;
 }
@@ -421,6 +428,53 @@ function signedAtText(sig) {
   return new Intl.DateTimeFormat('es-AR', {
     dateStyle: 'full', timeStyle: 'long', timeZone: 'America/Argentina/Buenos_Aires'
   }).format(d) + ' (Argentina)';
+}
+
+function isPdfDocument(docu = {}) {
+  return (docu.contentType || '').includes('pdf') || /\.pdf$/i.test(docu.fileName || '');
+}
+
+function signatureStatusRows(docu = {}, currentEmail = '') {
+  const current = normalizeEmail(currentEmail);
+  const known = new Map();
+  (docu.signatureStatus || []).forEach((item) => {
+    const email = normalizeEmail(item.email || item.signerEmail || '');
+    if (!email) return;
+    const signedAt = item.signedAt?.toDate ? item.signedAt.toDate() : item.signedAtIso ? new Date(item.signedAtIso) : item.signedAt ? new Date(item.signedAt) : null;
+    known.set(email, {
+      email,
+      status: item.status === 'signed' ? 'signed' : 'pending',
+      displayName: item.displayName || item.signedByName || '',
+      signedAtText: signedAt && !Number.isNaN(signedAt.getTime()) ? new Intl.DateTimeFormat('es-AR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Argentina/Buenos_Aires' }).format(signedAt) : 'Fecha no disponible',
+      isCurrent: email === current,
+    });
+  });
+  const emails = [...new Set([...(docu.signerEmails || []), ...(docu.allSignerEmails || []), ...(docu.signatureFields || []).map((f) => f.signerEmail)].map(normalizeEmail).filter(Boolean))];
+  emails.forEach((email) => {
+    if (!known.has(email)) known.set(email, { email, status: 'pending', displayName: '', signedAtText: '', isCurrent: email === current });
+  });
+  return [...known.values()].sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || a.email.localeCompare(b.email));
+}
+
+async function ensureServerArtifactForDoc(projectId, docId, docu, type) {
+  const current = type === 'signed'
+    ? docu.serverArtifacts?.signedPdfPath
+    : docu.serverArtifacts?.certificatePdfPath;
+  if (current) return current;
+  const generateArtifacts = httpsCallable(functions, 'generateDocumentArtifacts');
+  const result = await generateArtifacts({ projectId, docId });
+  const data = result.data || {};
+  const path = type === 'signed' ? data.signedPdfPath : data.certificatePdfPath;
+  if (!path) throw new Error('La función no devolvió la ruta del archivo generado.');
+  return path;
+}
+
+async function downloadStoragePath(path, filename) {
+  const u = await getDownloadURL(ref(storage, path));
+  const response = await fetch(u);
+  if (!response.ok) throw new Error(`Storage respondió ${response.status}`);
+  const blob = await response.blob();
+  downloadBytes(filename, blob, blob.type || 'application/pdf');
 }
 
 function dataUrlToBytes(dataUrl = '') {
@@ -670,13 +724,88 @@ function EditSignatureFields({ project, docu, onClose }) {
 function PendingDoc({ request, user }) {
   const [signed, setSigned] = useState(false);
   const [open, setOpen] = useState(false);
+  const [docu, setDocu] = useState(null);
+  const [downloadBusy, setDownloadBusy] = useState('');
+
   useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid), (snap) => setSigned(snap.exists()),
     (err) => console.warn('No se pudo cargar estado de firma:', err.message)), [request.projectId, request.docId, user.uid]);
-  return <div className="pendingBlock"><div className="pending"><div><strong>{request.title}</strong><small>{request.projectName || 'Proyecto'} · {request.fileName}<br/>Hash: {request.sha256}</small></div><div className="actions">{signed ? <Badge tone="good"><CheckCircle2 size={14}/> Firmado</Badge> : <Button onClick={() => setOpen((v)=>!v)}>{open ? 'Cerrar' : 'Abrir para firmar'}</Button>}</div></div>{open && !signed && <SigningRoom request={request} user={user}/>}</div>;
+
+  useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId), (snap) => {
+    if (snap.exists()) setDocu({ id: snap.id, projectId: request.projectId, ...snap.data() });
+  }, (err) => console.warn('No se pudo cargar documento asignado:', err.message)), [request.projectId, request.docId]);
+
+  async function downloadArtifact(type) {
+    if (!docu) return;
+    setDownloadBusy(type);
+    try {
+      const isSigned = type === 'signed';
+      if (isSigned && !isPdfDocument(docu)) {
+        alert('La descarga de PDF firmado por ahora está disponible para documentos PDF.');
+        return;
+      }
+      const path = await ensureServerArtifactForDoc(request.projectId, request.docId, docu, type);
+      const suffix = isSigned ? 'firmado-gb-sign.pdf' : 'certificado-evidencia-gb-sign.pdf';
+      await downloadStoragePath(path, `${safeFileName(docu.title || request.title)}-${suffix}`);
+    } catch (err) {
+      console.error(err);
+      alert(`No se pudo descargar el archivo: ${err.message || err}`);
+    } finally {
+      setDownloadBusy('');
+    }
+  }
+
+  const statusLabel = signed ? 'Firmado por vos' : 'Pendiente de tu firma';
+
+  return <div className="pendingBlock">
+    <div className="pending">
+      <div>
+        <strong>{request.title}</strong>
+        <small>{request.projectName || 'Proyecto'} · {request.fileName}<br/>Hash: {request.sha256}</small>
+      </div>
+      <div className="actions">
+        <Badge tone={signed ? 'good' : 'warn'}>{signed ? <CheckCircle2 size={14}/> : null}{statusLabel}</Badge>
+        <Button onClick={() => setOpen((v)=>!v)}>{open ? 'Cerrar' : signed ? 'Ver estado y descargas' : 'Abrir para firmar'}</Button>
+      </div>
+    </div>
+    {open && <Card className="signerStatusCard">
+      <SignatureStatusPanel docu={docu || request} currentEmail={user.email}/>
+      {signed && <div className="actions signerDownloads">
+        <Button variant="ghost" onClick={() => downloadArtifact('signed')} disabled={downloadBusy === 'signed'}>
+          <Download size={16}/>{downloadBusy === 'signed' ? 'Preparando...' : 'Descargar PDF firmado'}
+        </Button>
+        <Button variant="ghost" onClick={() => downloadArtifact('certificate')} disabled={downloadBusy === 'certificate'}>
+          <Download size={16}/>{downloadBusy === 'certificate' ? 'Preparando...' : 'Descargar certificado'}
+        </Button>
+      </div>}
+    </Card>}
+    {open && !signed && <SigningRoom request={request} user={user} docu={docu}/>} 
+  </div>;
+}
+
+function SignatureStatusPanel({ docu, currentEmail }) {
+  const rows = signatureStatusRows(docu || {}, currentEmail);
+  if (!rows.length) return <p className="muted">Todavía no hay información de firmantes para este documento.</p>;
+  const total = rows.length;
+  const signedCount = rows.filter((r) => r.status === 'signed').length;
+  return <div className="signatureStatusPanel">
+    <div className="statusSummary">
+      <strong>Estado de firmas</strong>
+      <Badge tone={signedCount === total ? 'good' : 'warn'}>{signedCount}/{total} firmado</Badge>
+    </div>
+    <div className="signerStatusList">
+      {rows.map((r) => <div className={`signerStatusItem ${r.isCurrent ? 'current' : ''}`} key={r.email}>
+        <div>
+          <strong>{r.email}{r.isCurrent ? ' · vos' : ''}</strong>
+          <small>{r.status === 'signed' ? `${r.displayName ? `${r.displayName} · ` : ''}${r.signedAtText}` : 'Pendiente de firma'}</small>
+        </div>
+        <Badge tone={r.status === 'signed' ? 'good' : 'warn'}>{r.status === 'signed' ? 'Firmado' : 'Pendiente'}</Badge>
+      </div>)}
+    </div>
+  </div>;
 }
 
 
-function SigningRoom({ request, user }) {
+function SigningRoom({ request, user, docu }) {
   const [url, setUrl] = useState('');
   const [activeFieldId, setActiveFieldId] = useState('');
   const [signatureMode, setSignatureMode] = useState('drawn');
