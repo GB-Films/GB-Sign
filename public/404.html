@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GB Sign</title>
+    <script>
+      (function () {
+        var base = '/GB-Sign/';
+        var path = window.location.pathname || '';
+        var rest = path.indexOf(base) === 0 ? path.slice(base.length) : '';
+        var query = window.location.search || '';
+        var hash = window.location.hash || '';
+        if (rest && !hash) {
+          hash = '#/' + rest.replace(/^\/+/, '');
+        }
+        window.location.replace(base + query + hash);
+      })();
+    </script>
+  </head>
+  <body>Redirigiendo a GB Sign...</body>
+</html>

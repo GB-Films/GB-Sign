@@ -24,6 +24,38 @@ const MIN_SIGNATURE_FIELD_H = 0.085;
 
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
+function getRouteParams() {
+  const search = new URLSearchParams(window.location.search);
+  let sign = search.get('sign') || '';
+  let mobileSign = search.get('mobileSign') || '';
+  const rawHash = (window.location.hash || '').replace(/^#\/?/, '');
+  if (rawHash) {
+    const hashQueryIndex = rawHash.indexOf('?');
+    const hashPath = hashQueryIndex >= 0 ? rawHash.slice(0, hashQueryIndex) : rawHash;
+    const hashQuery = hashQueryIndex >= 0 ? rawHash.slice(hashQueryIndex + 1) : '';
+    const hashParams = new URLSearchParams(hashQuery);
+    sign = sign || hashParams.get('sign') || '';
+    mobileSign = mobileSign || hashParams.get('mobileSign') || '';
+    const parts = hashPath.split('/').filter(Boolean);
+    if (!sign && parts[0] === 'sign' && parts[1]) sign = decodeURIComponent(parts[1]);
+    if (!mobileSign && (parts[0] === 'mobileSign' || parts[0] === 'mobile-sign') && parts[1]) mobileSign = decodeURIComponent(parts[1]);
+  }
+  return { sign, mobileSign };
+}
+
+function publicAppUrl() {
+  const configured = import.meta.env.VITE_PUBLIC_APP_URL || '';
+  const fallback = new URL(import.meta.env.BASE_URL || '/', window.location.origin).toString();
+  const raw = configured || fallback;
+  return raw.endsWith('/') ? raw : `${raw}/`;
+}
+
+function buildAppHashLink(kind, requestId) {
+  const url = new URL(publicAppUrl());
+  url.hash = `/${kind}/${encodeURIComponent(requestId)}`;
+  return url.toString();
+}
+
 function useAuth() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -74,17 +106,21 @@ export default function App() {
   const [documents, setDocuments] = useState([]);
   const [pending, setPending] = useState([]);
   const [signaturesByDoc, setSignaturesByDoc] = useState({});
-  const [directRequestId, setDirectRequestId] = useState(() => new URLSearchParams(window.location.search).get('sign') || '');
-  const [mobileRequestId, setMobileRequestId] = useState(() => new URLSearchParams(window.location.search).get('mobileSign') || '');
+  const [directRequestId, setDirectRequestId] = useState(() => getRouteParams().sign);
+  const [mobileRequestId, setMobileRequestId] = useState(() => getRouteParams().mobileSign);
 
   useEffect(() => {
     const onPop = () => {
-      const params = new URLSearchParams(window.location.search);
-      setDirectRequestId(params.get('sign') || '');
-      setMobileRequestId(params.get('mobileSign') || '');
+      const params = getRouteParams();
+      setDirectRequestId(params.sign);
+      setMobileRequestId(params.mobileSign);
     };
     window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
+    window.addEventListener('hashchange', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      window.removeEventListener('hashchange', onPop);
+    };
   }, []);
 
   useEffect(() => {
@@ -176,9 +212,7 @@ export default function App() {
 }
 
 function Login() {
-  const params = new URLSearchParams(window.location.search);
-  const directRequestId = params.get('sign') || '';
-  const mobileRequestId = params.get('mobileSign') || '';
+  const { sign: directRequestId, mobileSign: mobileRequestId } = getRouteParams();
   return <main className="login"><Card className="loginCard"><ShieldCheck size={46}/><h1>GB Sign</h1><p>Ingresá con Google. Si sos firmante, solo vas a ver los documentos asignados exactamente a tu correo.</p>{(directRequestId || mobileRequestId) && <div className="directLoginNotice"><strong>{mobileRequestId ? 'Firma desde celular detectada.' : 'Link directo de firma detectado.'}</strong><span>Después de iniciar sesión vas a ir directo al documento si este Google es el mail invitado.</span></div>}<Button onClick={() => signInWithPopup(auth, provider)}>Ingresar con Google</Button></Card></main>;
 }
 
@@ -539,17 +573,11 @@ function SignatureShareRow({ project, docu, email }) {
 }
 
 function signingLink(requestId) {
-  const base = import.meta.env.BASE_URL || '/';
-  const url = new URL(base, window.location.origin);
-  url.searchParams.set('sign', requestId);
-  return url.toString();
+  return buildAppHashLink('sign', requestId);
 }
 
 function mobileSigningLink(requestId) {
-  const base = import.meta.env.BASE_URL || '/';
-  const url = new URL(base, window.location.origin);
-  url.searchParams.set('mobileSign', requestId);
-  return url.toString();
+  return buildAppHashLink('mobile-sign', requestId);
 }
 
 function safeFileName(value = 'documento') {
