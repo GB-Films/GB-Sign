@@ -8,7 +8,7 @@ import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
   CheckCircle2, ClipboardCopy, Download, FileSignature, FolderPlus,
-  LockKeyhole, LogOut, PenLine, Settings, ShieldCheck, Upload, Users
+  LockKeyhole, LogOut, PenLine, Settings, ShieldCheck, Trash2, Upload, Users
 } from 'lucide-react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { auth, db, provider, storage, functions } from './firebase';
@@ -152,7 +152,7 @@ export default function App() {
         </Card>
       </section>
 
-      {selectedProject && <ProjectPanel project={selectedProject} documents={documents} signaturesByDoc={signaturesByDoc} user={user} isAdmin={isAdmin}/>} 
+      {selectedProject && <ProjectPanel project={selectedProject} documents={documents} signaturesByDoc={signaturesByDoc} user={user} isAdmin={isAdmin} onProjectDeleted={() => setSelectedProjectId('')}/>} 
     </main>
   );
 }
@@ -189,15 +189,33 @@ function CreateProject({ onCreated }) {
   return <form className="inlineForm" onSubmit={submit}><input placeholder="Nombre del proyecto" value={name} onChange={(e)=>setName(e.target.value)}/><input placeholder="Cliente / marca" value={client} onChange={(e)=>setClient(e.target.value)}/><Button>Crear</Button></form>;
 }
 
-function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin }) {
+function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin, onProjectDeleted }) {
   const isOwner = project.ownerUid === user.uid;
   const canManageMembers = isAdmin || isOwner;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
+
+  async function deleteProject() {
+    if (!isAdmin) return;
+    const ok = window.confirm(`¿Borrar el proyecto "${project.name}"? Se eliminarán documentos, solicitudes, firmas y archivos asociados. Esta acción no se puede deshacer.`);
+    if (!ok) return;
+    setDeletingProject(true);
+    try {
+      const fn = httpsCallable(functions, 'deleteProject');
+      await fn({ projectId: project.id });
+      onProjectDeleted?.();
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || 'No se pudo borrar el proyecto.');
+    } finally {
+      setDeletingProject(false);
+    }
+  }
 
   return <section className="project">
     <div className="sectionTitle projectTitle">
       <div><h2>{project.name}</h2><Badge>{project.client || 'Proyecto interno'}</Badge></div>
-      <Button variant="ghost" type="button" onClick={() => setSettingsOpen((v) => !v)}><Settings size={16}/> Configuración</Button>
+      <div className="actions"><Button variant="ghost" type="button" onClick={() => setSettingsOpen((v) => !v)}><Settings size={16}/> Configuración</Button>{isAdmin && <Button variant="danger" type="button" onClick={deleteProject} disabled={deletingProject}><Trash2 size={16}/>{deletingProject ? 'Borrando...' : 'Borrar proyecto'}</Button>}</div>
     </div>
 
     {settingsOpen && <Card className="settingsCard">
@@ -210,7 +228,7 @@ function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin }) {
     </section>
     <Card><h3>Documentos del proyecto</h3><div className="table">
       <div className="tr th"><span>Documento</span><span>Firmantes externos</span><span>Estado</span><span>Acciones</span></div>
-      {documents.map((d) => <DocumentRow key={d.id} project={project} docu={d} signatures={signaturesByDoc[d.id] || []}/>) }
+      {documents.map((d) => <DocumentRow key={d.id} project={project} docu={d} signatures={signaturesByDoc[d.id] || []} isAdmin={isAdmin}/>) }
     </div>{!documents.length && <Empty title="Sin documentos">Subí un PDF, imagen o documento para solicitar firmas.</Empty>}</Card>
   </section>;
 }
@@ -319,11 +337,12 @@ function Members({ project, currentUser, canManage }) {
   </div>;
 }
 
-function DocumentRow({ project, docu, signatures }) {
+function DocumentRow({ project, docu, signatures, isAdmin }) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState('');
   const [editFields, setEditFields] = useState(false);
+  const [deletingDoc, setDeletingDoc] = useState(false);
   const tone = statusFor(docu, signatures) === 'Completo' ? 'good' : 'warn';
   const isPdf = (docu.contentType || '').includes('pdf') || /\.pdf$/i.test(docu.fileName || '');
 
@@ -374,12 +393,25 @@ function DocumentRow({ project, docu, signatures }) {
     }
   }
 
+  async function deleteDocument() {
+    if (!isAdmin) return;
+    const ok = window.confirm(`¿Borrar el documento "${docu.title}"? Se eliminarán archivo original, firmas, solicitudes y artefactos asociados. Esta acción no se puede deshacer.`);
+    if (!ok) return;
+    setDeletingDoc(true);
+    try {
+      const fn = httpsCallable(functions, 'deleteDocument');
+      await fn({ projectId: project.id, docId: docu.id });
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || 'No se pudo borrar el documento.');
+    } finally {
+      setDeletingDoc(false);
+    }
+  }
+
 
   async function ensureServerArtifact(type) {
-    const current = type === 'signed'
-      ? docu.serverArtifacts?.signedPdfPath
-      : docu.serverArtifacts?.certificatePdfPath;
-    if (current) return current;
+    // Siempre regeneramos artefactos para usar el último motor de estampado del servidor.
     const generateArtifacts = httpsCallable(functions, 'generateDocumentArtifacts');
     const result = await generateArtifacts({ projectId: project.id, docId: docu.id });
     const data = result.data || {};
@@ -404,7 +436,7 @@ function DocumentRow({ project, docu, signatures }) {
   }
 
   return <>
-    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado servidor'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado servidor'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{url && <a href={url}>link</a>}</span></div>
+    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>SHA-256: {docu.sha256}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions"><Button variant="ghost" onClick={openFile}><Download size={16}/> Ver</Button><Button variant="ghost" onClick={() => setEditFields((v)=>!v)}><PenLine size={16}/> Campos</Button><Button variant="ghost" onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}>{pdfBusy === 'signed' ? 'Generando...' : 'PDF firmado servidor'}</Button><Button variant="ghost" onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}>{pdfBusy === 'certificate' ? 'Generando...' : 'Certificado servidor'}</Button><Button variant="ghost" onClick={evidence}>JSON</Button>{isAdmin && <Button variant="danger" onClick={deleteDocument} disabled={deletingDoc}><Trash2 size={16}/>{deletingDoc ? 'Borrando...' : 'Borrar'}</Button>}{url && <a href={url}>link</a>}</span></div>
     {editFields && <EditSignatureFields project={project} docu={docu} onClose={() => setEditFields(false)}/>} 
   </>;
 }
@@ -457,10 +489,7 @@ function signatureStatusRows(docu = {}, currentEmail = '') {
 }
 
 async function ensureServerArtifactForDoc(projectId, docId, docu, type) {
-  const current = type === 'signed'
-    ? docu.serverArtifacts?.signedPdfPath
-    : docu.serverArtifacts?.certificatePdfPath;
-  if (current) return current;
+  // Siempre regeneramos artefactos para usar el último motor de estampado del servidor.
   const generateArtifacts = httpsCallable(functions, 'generateDocumentArtifacts');
   const result = await generateArtifacts({ projectId, docId });
   const data = result.data || {};
@@ -559,29 +588,57 @@ async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const boxW = Math.max(70, field.w * width);
   const boxH = Math.max(34, field.h * height);
   const y = height - (field.y * height) - boxH;
-  const pad = Math.max(3, Math.min(8, boxH * 0.12));
-  const metaH = Math.min(28, Math.max(16, boxH * 0.34));
+  const pad = Math.max(3, Math.min(7, boxH * 0.11));
+  const canShowMeta = boxW >= 150 && boxH >= 56;
+  const metaH = canShowMeta ? Math.min(24, Math.max(15, boxH * 0.30)) : 0;
 
-  page.drawRectangle({ x, y, width: boxW, height: boxH, borderColor: rgb(0.08, 0.08, 0.08), borderWidth: 0.9, color: rgb(1, 1, 1), opacity: 0.92 });
-  page.drawLine({ start: { x: x + pad, y: y + metaH + 1 }, end: { x: x + boxW - pad, y: y + metaH + 1 }, thickness: 0.6, color: rgb(0.1, 0.1, 0.1) });
+  page.drawRectangle({ x, y, width: boxW, height: boxH, borderColor: rgb(0.08, 0.08, 0.08), borderWidth: 0.9, color: rgb(1, 1, 1), opacity: 0.94 });
+  if (canShowMeta) {
+    page.drawLine({ start: { x: x + pad, y: y + metaH + 1 }, end: { x: x + boxW - pad, y: y + metaH + 1 }, thickness: 0.5, color: rgb(0.1, 0.1, 0.1) });
+  }
 
   const signatureAreaH = Math.max(8, boxH - metaH - pad * 1.5);
+  const signatureY = y + metaH + Math.max(2, pad * 0.45);
   if (sig.signatureType === 'drawn' && sig.signatureImage) {
     try {
       const png = await pdfDoc.embedPng(dataUrlToBytes(sig.signatureImage));
-      const dims = fitImage(png, boxW - pad * 2, signatureAreaH);
-      page.drawImage(png, { x: x + (boxW - dims.width) / 2, y: y + metaH + 4 + Math.max(0, (signatureAreaH - dims.height) / 2), width: dims.width, height: dims.height });
+      const dims = fitImage(png, boxW - pad * 2, signatureAreaH - 2);
+      page.drawImage(png, { x: x + (boxW - dims.width) / 2, y: signatureY + Math.max(0, (signatureAreaH - dims.height) / 2), width: dims.width, height: dims.height });
     } catch (err) {
-      page.drawText(sig.displayName || sig.typedName || sig.email || 'Firma', { x: x + pad, y: y + metaH + signatureAreaH * 0.35, size: Math.min(22, signatureAreaH * 0.55), font: fonts.italic, color: rgb(0.05, 0.05, 0.05), maxWidth: boxW - pad * 2 });
+      drawFittedText(page, sig.displayName || sig.typedName || sig.email || 'Firma', fonts.italic, x + pad, signatureY + signatureAreaH * 0.38, boxW - pad * 2, Math.min(22, signatureAreaH * 0.55), 6);
     }
   } else {
-    page.drawText(sig.typedName || sig.displayName || sig.email || 'Firma', { x: x + pad, y: y + metaH + signatureAreaH * 0.32, size: Math.min(24, Math.max(10, signatureAreaH * 0.55)), font: fonts.italic, color: rgb(0.05, 0.05, 0.05), maxWidth: boxW - pad * 2 });
+    drawFittedText(page, sig.typedName || sig.displayName || sig.email || 'Firma', fonts.italic, x + pad, signatureY + signatureAreaH * 0.35, boxW - pad * 2, Math.min(24, Math.max(10, signatureAreaH * 0.55)), 6);
   }
 
-  const line1 = `${sig.displayName || sig.typedName || 'Firmante'} · DNI ${sig.dni || '-'}`;
-  const line2 = `${sig.email || '-'} · ${compactDate(sig)}`;
-  page.drawText(line1.slice(0, 120), { x: x + pad, y: y + metaH - 10, size: Math.min(7.6, Math.max(5.5, metaH * 0.28)), font: fonts.bold, color: rgb(0.08, 0.08, 0.08), maxWidth: boxW - pad * 2 });
-  page.drawText(line2.slice(0, 140), { x: x + pad, y: y + 4, size: Math.min(6.8, Math.max(5, metaH * 0.24)), font: fonts.regular, color: rgb(0.18, 0.18, 0.18), maxWidth: boxW - pad * 2 });
+  if (canShowMeta) {
+    const line1 = `DNI ${sig.dni || '-'} · ${sig.displayName || sig.typedName || 'Firmante'}`;
+    const line2 = `${sig.email || '-'} · ${compactDate(sig)}`;
+    const size1 = Math.min(6.6, Math.max(4.6, metaH * 0.26));
+    const size2 = Math.min(5.8, Math.max(4.2, metaH * 0.22));
+    drawFittedText(page, line1, fonts.bold, x + pad, y + metaH - size1 - 2, boxW - pad * 2, size1, 4);
+    drawFittedText(page, line2, fonts.regular, x + pad, y + 3.2, boxW - pad * 2, size2, 4);
+  }
+}
+
+function drawFittedText(page, text, font, x, y, maxWidth, maxSize, minSize = 4) {
+  const size = fitTextSize(font, text, maxWidth, maxSize, minSize);
+  const clean = truncateToWidth(font, text, maxWidth, size);
+  page.drawText(clean, { x, y, size, font, color: rgb(0.06, 0.06, 0.06), maxWidth });
+}
+
+function fitTextSize(font, text, maxWidth, maxSize, minSize = 4) {
+  let size = Math.max(minSize, maxSize);
+  while (size > minSize && font.widthOfTextAtSize(String(text || ''), size) > maxWidth) size -= 0.5;
+  return Math.max(minSize, size);
+}
+
+function truncateToWidth(font, text, maxWidth, size) {
+  const value = String(text || '');
+  if (font.widthOfTextAtSize(value, size) <= maxWidth) return value;
+  let next = value;
+  while (next.length > 3 && font.widthOfTextAtSize(`${next}…`, size) > maxWidth) next = next.slice(0, -1);
+  return `${next}…`;
 }
 
 function compactDate(sig) {
@@ -808,6 +865,7 @@ function SignatureStatusPanel({ docu, currentEmail }) {
 function SigningRoom({ request, user, docu }) {
   const [url, setUrl] = useState('');
   const [activeFieldId, setActiveFieldId] = useState('');
+  const [fieldClicked, setFieldClicked] = useState(false);
   const [signatureMode, setSignatureMode] = useState('drawn');
   const [typedName, setTypedName] = useState(user.displayName || '');
   const [signatureImage, setSignatureImage] = useState('');
@@ -816,19 +874,21 @@ function SigningRoom({ request, user, docu }) {
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const fields = (request.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalizeEmail(user.email));
-  const activeField = fields.find((f) => f.id === activeFieldId) || fields[0] || null;
+  const activeField = fields.find((f) => f.id === activeFieldId) || null;
   const cleanDni = normalizeDni(dni);
 
   useEffect(() => {
     getDownloadURL(ref(storage, request.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento:', err.message));
   }, [request.storagePath]);
 
-  useEffect(() => {
-    if (!activeFieldId && fields[0]) setActiveFieldId(fields[0].id);
-  }, [fields, activeFieldId]);
+
+  function selectSignatureField(fieldId) {
+    setActiveFieldId(fieldId);
+    setFieldClicked(true);
+  }
 
   async function sign() {
-    if (!activeField) { alert('No hay campo de firma asignado para tu mail.'); return; }
+    if (!fieldClicked || !activeField) { alert('Primero tenés que presionar el recuadro naranja de firma dentro del documento.'); return; }
     if (!cleanDni || cleanDni.length < 6) { alert('Completá tu DNI con números.'); return; }
     if (!dniConfirmed) { alert('Tenés que confirmar que el DNI ingresado es correcto.'); return; }
     if (!consent) { alert('Tenés que aceptar el consentimiento de firma electrónica.'); return; }
@@ -865,12 +925,12 @@ function SigningRoom({ request, user, docu }) {
 
   return <Card className="signingRoom">
     <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone="warn">Firma electrónica</Badge></div>
-    <p className="muted">Presioná tu recuadro asignado dentro del documento. Luego completá tu DNI, dibujá tu firma o usá una firma cursiva generada con tu nombre.</p>
-    {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={setActiveFieldId} signatures={buildPreviewSignatures(activeField, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
+    <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso obligatorio: presioná el recuadro naranja de firma'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : 'Para dejar constancia de intención, tocá/clickeá el recuadro asignado dentro del documento antes de avanzar.'}</span></div>
+    {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
     <div className="grid two signControls">
       <Card>
         <h3>Campo asignado</h3>
-        {fields.length ? <div className="chips">{fields.map((f, idx) => <button type="button" className={`chip chipButton ${f.id === activeFieldId ? 'active' : ''}`} key={f.id} onClick={() => setActiveFieldId(f.id)}>Campo {idx + 1} · {f.label || 'Firma'}</button>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
+        {fields.length ? <div className="chips">{fields.map((f, idx) => <span className={`chip chipButton ${fieldClicked && f.id === activeFieldId ? 'active' : ''}`} key={f.id}>Campo {idx + 1} · {fieldClicked && f.id === activeFieldId ? 'seleccionado' : 'tocá el recuadro en el documento'}</span>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
       </Card>
       <Card>
         <h3>Identidad del firmante</h3>
@@ -884,7 +944,7 @@ function SigningRoom({ request, user, docu }) {
       </Card>
     </div>
     <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
-    <div className="actions"><Button onClick={sign} disabled={busy || !activeField}>{busy ? 'Firmando...' : 'Confirmar firma electrónica'}</Button></div>
+    <div className="actions"><Button onClick={sign} disabled={busy || !fieldClicked || !activeField}>{busy ? 'Firmando...' : fieldClicked ? 'Confirmar firma electrónica' : 'Primero presioná el recuadro'}</Button></div>
   </Card>;
 }
 

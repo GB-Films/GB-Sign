@@ -451,3 +451,24 @@ Campos principales:
 Los firmantes externos ahora pueden abrir un documento asignado y ver el estado de todos los firmantes: quién ya firmó y quién sigue pendiente. Cuando el usuario ya firmó, la pantalla de firmante muestra botones para descargar el PDF firmado generado en servidor y el certificado PDF de evidencia.
 
 El botón manual **Activar firmantes** fue removido del flujo principal porque ya no debería usarse normalmente: las solicitudes se crean automáticamente al cargar el documento y se actualizan al guardar campos de firma.
+
+## Cambios de mantenimiento incorporados
+
+- El PDF firmado por servidor ahora adapta el contenido de firma al tamaño del recuadro. Si el recuadro es chico, solo estampa la firma visual dentro del área; DNI, email, fecha/hora y demás datos quedan completos en el certificado de evidencia para evitar textos fuera del campo.
+- El firmante debe presionar el recuadro naranja dentro del documento antes de poder confirmar la firma. Esto refuerza la intención explícita de firmar ese campo.
+- Los administradores pueden borrar documentos y proyectos desde la interfaz. El borrado se ejecuta por Cloud Functions para eliminar Firestore, solicitudes, firmas y archivos de Storage asociados.
+
+### Deploy necesario para estos cambios
+
+```powershell
+firebase.cmd deploy --project gb-sign-e1776 --only functions
+```
+
+Si aparecen errores CORS/INTERNAL para las nuevas funciones de borrado, habilitar invocación en Cloud Run desde Cloud Shell:
+
+```bash
+gcloud run services update deletedocument --region=us-central1 --no-invoker-iam-check
+gcloud run services update deleteproject --region=us-central1 --no-invoker-iam-check
+gcloud run services update signdocument --region=us-central1 --no-invoker-iam-check
+gcloud run services update generatedocumentartifacts --region=us-central1 --no-invoker-iam-check
+```

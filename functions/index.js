@@ -273,6 +273,92 @@ async function generateArtifacts(projectId, docId, context) {
   return { signedPdfPath, certificatePdfPath, originalSha256, signedPdfSha256, certificateSha256, status: allSigned ? 'completed' : 'partially_signed' };
 }
 
+export const deleteDocument = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  const auth = requireAuth(request);
+  await requireAdmin(auth.uid);
+  const data = request.data || {};
+  const projectId = cleanId(data.projectId, 'projectId');
+  const docId = cleanId(data.docId, 'docId');
+  const result = await deleteDocumentCascade(projectId, docId);
+  return { ok: true, ...result };
+});
+
+export const deleteProject = onCall({ timeoutSeconds: 300, memory: '1GiB' }, async (request) => {
+  const auth = requireAuth(request);
+  await requireAdmin(auth.uid);
+  const data = request.data || {};
+  const projectId = cleanId(data.projectId, 'projectId');
+  const projectRef = db.collection('projects').doc(projectId);
+  const projectSnap = await projectRef.get();
+  if (!projectSnap.exists) throw new HttpsError('not-found', 'El proyecto no existe.');
+
+  const docsSnap = await projectRef.collection('documents').get();
+  let deletedDocuments = 0;
+  let deletedSignatures = 0;
+  let deletedRequests = 0;
+  for (const d of docsSnap.docs) {
+    const result = await deleteDocumentCascade(projectId, d.id, { skipProjectCheck: true });
+    deletedDocuments += 1;
+    deletedSignatures += result.deletedSignatures || 0;
+    deletedRequests += result.deletedRequests || 0;
+  }
+
+  const membersSnap = await projectRef.collection('members').get();
+  await deleteRefsInChunks(membersSnap.docs.map((d) => d.ref));
+  await deleteStoragePrefix(`projects/${projectId}/`);
+  await projectRef.delete();
+
+  return { ok: true, deletedDocuments, deletedMembers: membersSnap.size, deletedSignatures, deletedRequests };
+});
+
+async function requireAdmin(uid) {
+  const snap = await db.collection('admins').doc(uid).get();
+  if (!snap.exists) throw new HttpsError('permission-denied', 'Solo un administrador puede borrar proyectos o documentos.');
+}
+
+async function deleteDocumentCascade(projectId, docId, options = {}) {
+  const projectRef = db.collection('projects').doc(projectId);
+  const docRef = projectRef.collection('documents').doc(docId);
+  if (!options.skipProjectCheck) {
+    const projectSnap = await projectRef.get();
+    if (!projectSnap.exists) throw new HttpsError('not-found', 'El proyecto no existe.');
+  }
+  const docSnap = await docRef.get();
+  if (!docSnap.exists) throw new HttpsError('not-found', 'El documento no existe.');
+
+  const signaturesSnap = await docRef.collection('signatures').get();
+  await deleteRefsInChunks(signaturesSnap.docs.map((d) => d.ref));
+
+  const requestsSnap = await db.collection('signatureRequests')
+    .where('projectId', '==', projectId)
+    .where('docId', '==', docId)
+    .get();
+  await deleteRefsInChunks(requestsSnap.docs.map((d) => d.ref));
+
+  await deleteStoragePrefix(`projects/${projectId}/documents/${docId}/`);
+  await deleteStoragePrefix(`projects/${projectId}/artifacts/${docId}/`);
+  await docRef.delete();
+
+  return { deletedSignatures: signaturesSnap.size, deletedRequests: requestsSnap.size };
+}
+
+async function deleteRefsInChunks(refs) {
+  for (let i = 0; i < refs.length; i += 450) {
+    const batch = db.batch();
+    refs.slice(i, i + 450).forEach((ref) => batch.delete(ref));
+    await batch.commit();
+  }
+}
+
+async function deleteStoragePrefix(prefix) {
+  try {
+    await bucket.deleteFiles({ prefix, force: true });
+  } catch (err) {
+    if (err?.code === 404) return;
+    console.warn(`No se pudieron borrar archivos con prefijo ${prefix}:`, err?.message || err);
+  }
+}
+
 async function buildSignedPdf({ originalBytes, project, docu, signatures, originalSha256, context }) {
   const pdfDoc = await PDFDocument.load(originalBytes, { ignoreEncryption: false });
   const fonts = await loadPdfFonts(pdfDoc);
@@ -322,29 +408,57 @@ async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const boxW = Math.max(70, Number(field.w || 0.2) * width);
   const boxH = Math.max(34, Number(field.h || 0.08) * height);
   const y = height - (Number(field.y || 0) * height) - boxH;
-  const pad = Math.max(3, Math.min(8, boxH * 0.12));
-  const metaH = Math.min(28, Math.max(16, boxH * 0.34));
+  const pad = Math.max(3, Math.min(7, boxH * 0.11));
+  const canShowMeta = boxW >= 150 && boxH >= 56;
+  const metaH = canShowMeta ? Math.min(24, Math.max(15, boxH * 0.30)) : 0;
 
   page.drawRectangle({ x, y, width: boxW, height: boxH, borderColor: rgb(0.08, 0.08, 0.08), borderWidth: 0.9, color: rgb(1, 1, 1), opacity: 0.94 });
-  page.drawLine({ start: { x: x + pad, y: y + metaH + 1 }, end: { x: x + boxW - pad, y: y + metaH + 1 }, thickness: 0.6, color: rgb(0.1, 0.1, 0.1) });
+  if (canShowMeta) {
+    page.drawLine({ start: { x: x + pad, y: y + metaH + 1 }, end: { x: x + boxW - pad, y: y + metaH + 1 }, thickness: 0.5, color: rgb(0.1, 0.1, 0.1) });
+  }
 
   const signatureAreaH = Math.max(8, boxH - metaH - pad * 1.5);
+  const signatureY = y + metaH + Math.max(2, pad * 0.45);
   if (sig.signatureType === 'drawn' && sig.signatureImage) {
     try {
       const png = await pdfDoc.embedPng(dataUrlToBuffer(sig.signatureImage));
-      const dims = fitImage(png, boxW - pad * 2, signatureAreaH);
-      page.drawImage(png, { x: x + (boxW - dims.width) / 2, y: y + metaH + 4 + Math.max(0, (signatureAreaH - dims.height) / 2), width: dims.width, height: dims.height });
+      const dims = fitImage(png, boxW - pad * 2, signatureAreaH - 2);
+      page.drawImage(png, { x: x + (boxW - dims.width) / 2, y: signatureY + Math.max(0, (signatureAreaH - dims.height) / 2), width: dims.width, height: dims.height });
     } catch {
-      page.drawText(sig.displayName || sig.typedName || sig.email || 'Firma', { x: x + pad, y: y + metaH + signatureAreaH * 0.35, size: Math.min(22, signatureAreaH * 0.55), font: fonts.italic, color: rgb(0.05, 0.05, 0.05), maxWidth: boxW - pad * 2 });
+      drawFittedText(page, sig.displayName || sig.typedName || sig.email || 'Firma', fonts.italic, x + pad, signatureY + signatureAreaH * 0.38, boxW - pad * 2, Math.min(22, signatureAreaH * 0.55), 6);
     }
   } else {
-    page.drawText(sig.typedName || sig.displayName || sig.email || 'Firma', { x: x + pad, y: y + metaH + signatureAreaH * 0.32, size: Math.min(24, Math.max(10, signatureAreaH * 0.55)), font: fonts.italic, color: rgb(0.05, 0.05, 0.05), maxWidth: boxW - pad * 2 });
+    drawFittedText(page, sig.typedName || sig.displayName || sig.email || 'Firma', fonts.italic, x + pad, signatureY + signatureAreaH * 0.35, boxW - pad * 2, Math.min(24, Math.max(10, signatureAreaH * 0.55)), 6);
   }
 
-  const line1 = `${sig.displayName || sig.typedName || 'Firmante'} · DNI ${sig.dni || '-'}`;
-  const line2 = `${sig.email || '-'} · ${compactDate(sig)}`;
-  page.drawText(line1.slice(0, 120), { x: x + pad, y: y + metaH - 10, size: Math.min(7.6, Math.max(5.5, metaH * 0.28)), font: fonts.bold, color: rgb(0.08, 0.08, 0.08), maxWidth: boxW - pad * 2 });
-  page.drawText(line2.slice(0, 140), { x: x + pad, y: y + 4, size: Math.min(6.8, Math.max(5, metaH * 0.24)), font: fonts.regular, color: rgb(0.18, 0.18, 0.18), maxWidth: boxW - pad * 2 });
+  if (canShowMeta) {
+    const line1 = `DNI ${sig.dni || '-'} · ${sig.displayName || sig.typedName || 'Firmante'}`;
+    const line2 = `${sig.email || '-'} · ${compactDate(sig)}`;
+    const size1 = Math.min(6.6, Math.max(4.6, metaH * 0.26));
+    const size2 = Math.min(5.8, Math.max(4.2, metaH * 0.22));
+    drawFittedText(page, line1, fonts.bold, x + pad, y + metaH - size1 - 2, boxW - pad * 2, size1, 4);
+    drawFittedText(page, line2, fonts.regular, x + pad, y + 3.2, boxW - pad * 2, size2, 4);
+  }
+}
+
+function drawFittedText(page, text, font, x, y, maxWidth, maxSize, minSize = 4) {
+  const size = fitTextSize(font, text, maxWidth, maxSize, minSize);
+  const clean = truncateToWidth(font, text, maxWidth, size);
+  page.drawText(clean, { x, y, size, font, color: rgb(0.06, 0.06, 0.06), maxWidth });
+}
+
+function fitTextSize(font, text, maxWidth, maxSize, minSize = 4) {
+  let size = Math.max(minSize, maxSize);
+  while (size > minSize && font.widthOfTextAtSize(String(text || ''), size) > maxWidth) size -= 0.5;
+  return Math.max(minSize, size);
+}
+
+function truncateToWidth(font, text, maxWidth, size) {
+  const value = String(text || '');
+  if (font.widthOfTextAtSize(value, size) <= maxWidth) return value;
+  let next = value;
+  while (next.length > 3 && font.widthOfTextAtSize(`${next}…`, size) > maxWidth) next = next.slice(0, -1);
+  return `${next}…`;
 }
 
 async function appendEvidencePages(pdfDoc, { project, docu, signatures, originalSha256, signedPdfSha256, fonts, context, includeLegalNote = true }) {
