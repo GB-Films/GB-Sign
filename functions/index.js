@@ -13,10 +13,10 @@ const db = getFirestore();
 const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'gb-sign-e1776.firebasestorage.app';
 const bucket = getStorage().bucket(bucketName);
 
-const MIN_SIGNATURE_BOX_W_PT = 165;
-const MIN_SIGNATURE_BOX_H_PT = 58;
-const MAX_SIGNATURE_BOX_W_PT = 230;
-const MAX_SIGNATURE_BOX_H_PT = 80;
+const MIN_SIGNATURE_BOX_W_PT = 170;
+const MIN_SIGNATURE_BOX_H_PT = 62;
+const MAX_SIGNATURE_BOX_W_PT = 280;
+const MAX_SIGNATURE_BOX_H_PT = 92;
 
 const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
 
@@ -419,9 +419,9 @@ async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const rawY = fieldY + Math.max(0, (fieldH - boxH) / 2);
   const x = Math.max(12, Math.min(width - boxW - 12, rawX));
   const y = Math.max(12, Math.min(height - boxH - 12, rawY));
-  const pad = Math.max(4, Math.min(8, boxH * 0.10));
+  const pad = Math.max(3, Math.min(6, boxH * 0.075));
   const canShowMeta = true;
-  const metaH = canShowMeta ? Math.min(24, Math.max(15, boxH * 0.30)) : 0;
+  const metaH = canShowMeta ? Math.min(23, Math.max(14, boxH * 0.25)) : 0;
 
   page.drawRectangle({ x, y, width: boxW, height: boxH, borderColor: rgb(0.08, 0.08, 0.08), borderWidth: 0.9, color: rgb(1, 1, 1), opacity: 0.94 });
   if (canShowMeta) {
@@ -433,7 +433,7 @@ async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   if (sig.signatureType === 'drawn' && sig.signatureImage) {
     try {
       const png = await pdfDoc.embedPng(dataUrlToBuffer(sig.signatureImage));
-      const dims = fitImage(png, boxW - pad * 2, signatureAreaH - 2);
+      const dims = fitImage(png, boxW - pad * 1.2, signatureAreaH);
       page.drawImage(png, { x: x + (boxW - dims.width) / 2, y: signatureY + Math.max(0, (signatureAreaH - dims.height) / 2), width: dims.width, height: dims.height });
     } catch {
       drawFittedText(page, sig.displayName || sig.typedName || sig.email || 'Firma', fonts.italic, x + pad, signatureY + signatureAreaH * 0.38, boxW - pad * 2, Math.min(22, signatureAreaH * 0.55), 6);

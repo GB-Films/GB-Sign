@@ -640,6 +640,31 @@ function signatureDraftId(requestId, uid) {
   return `${requestId}_${uid}`;
 }
 
+function sortedSignatureFields(fields = []) {
+  return [...(fields || [])].sort((a, b) => {
+    const pageDiff = Number(a.page || 1) - Number(b.page || 1);
+    if (pageDiff) return pageDiff;
+    const yDiff = Number(a.y || 0) - Number(b.y || 0);
+    if (yDiff) return yDiff;
+    return Number(a.x || 0) - Number(b.x || 0);
+  });
+}
+
+function scrollToSignatureField(fieldId) {
+  if (!fieldId) return;
+  const el = document.querySelector(`[data-signature-field-id=\"${escapeCssIdent(String(fieldId))}\"]`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+  el.classList.add('located');
+  window.setTimeout(() => el.classList.remove('located'), 1300);
+}
+
+
+function escapeCssIdent(value = '') {
+  if (window.CSS?.escape) return window.CSS.escape(value);
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+}
+
 function safeFileName(value = 'documento') {
   return String(value || 'documento')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -785,17 +810,17 @@ async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   const { width, height } = page.getSize();
   const fieldW = Math.max(1, Number(field.w || 0.28) * width);
   const fieldH = Math.max(1, Number(field.h || 0.075) * height);
-  const boxW = Math.min(width - 24, Math.max(165, Math.min(fieldW, 230)));
-  const boxH = Math.min(height - 24, Math.max(58, Math.min(fieldH, 80)));
+  const boxW = Math.min(width - 24, Math.max(170, Math.min(fieldW, 280)));
+  const boxH = Math.min(height - 24, Math.max(62, Math.min(fieldH, 92)));
   const fieldX = Number(field.x || 0) * width;
   const fieldY = height - (Number(field.y || 0) * height) - fieldH;
   const rawX = fieldX + Math.max(0, (fieldW - boxW) / 2);
   const rawY = fieldY + Math.max(0, (fieldH - boxH) / 2);
   const x = Math.max(12, Math.min(width - boxW - 12, rawX));
   const y = Math.max(12, Math.min(height - boxH - 12, rawY));
-  const pad = Math.max(4, Math.min(8, boxH * 0.10));
+  const pad = Math.max(3, Math.min(6, boxH * 0.075));
   const canShowMeta = true;
-  const metaH = canShowMeta ? Math.min(24, Math.max(15, boxH * 0.30)) : 0;
+  const metaH = canShowMeta ? Math.min(23, Math.max(14, boxH * 0.25)) : 0;
 
   page.drawRectangle({ x, y, width: boxW, height: boxH, borderColor: rgb(0.08, 0.08, 0.08), borderWidth: 0.9, color: rgb(1, 1, 1), opacity: 0.94 });
   if (canShowMeta) {
@@ -807,7 +832,7 @@ async function drawSignatureStamp(pdfDoc, page, field, sig, fonts) {
   if (sig.signatureType === 'drawn' && sig.signatureImage) {
     try {
       const png = await pdfDoc.embedPng(dataUrlToBytes(sig.signatureImage));
-      const dims = fitImage(png, boxW - pad * 2, signatureAreaH - 2);
+      const dims = fitImage(png, boxW - pad * 1.2, signatureAreaH);
       page.drawImage(png, { x: x + (boxW - dims.width) / 2, y: signatureY + Math.max(0, (signatureAreaH - dims.height) / 2), width: dims.width, height: dims.height });
     } catch (err) {
       drawFittedText(page, sig.displayName || sig.typedName || sig.email || 'Firma', fonts.italic, x + pad, signatureY + signatureAreaH * 0.38, boxW - pad * 2, Math.min(22, signatureAreaH * 0.55), 6);
@@ -1139,6 +1164,8 @@ function MobileSignatureCaptureOnly({ request, sessionId, user }) {
     if (!signatureImage) { alert('Dibujá tu firma con el dedo antes de enviarla.'); return; }
     setBusy(true);
     try {
+      const finalSignatureImage = await trimSignatureDataUrl(signatureImage);
+      setSignatureImage(finalSignatureImage);
       const payload = {
         requestId: request.id,
         projectId: request.projectId,
@@ -1146,7 +1173,7 @@ function MobileSignatureCaptureOnly({ request, sessionId, user }) {
         signerEmail: normalizeEmail(user.email),
         uid: user.uid,
         displayName: user.displayName || '',
-        signatureImage,
+        signatureImage: finalSignatureImage,
         status: 'ready',
         updatedAt: serverTimestamp(),
         updatedAtIso: new Date().toISOString(),
@@ -1215,6 +1242,8 @@ function MobileFullSigningRoom({ request, user }) {
     if (!consent) { alert('Aceptá el consentimiento de firma electrónica.'); return; }
     setBusy(true);
     try {
+      const finalSignatureImage = signatureMode === 'drawn' ? await trimSignatureDataUrl(signatureImage) : '';
+      if (finalSignatureImage) setSignatureImage(finalSignatureImage);
       const signDocument = httpsCallable(functions, 'signDocument');
       await signDocument({
         projectId: request.projectId,
@@ -1223,7 +1252,7 @@ function MobileFullSigningRoom({ request, user }) {
         fieldId: activeField.id,
         signatureField: activeField,
         signatureType: signatureMode,
-        signatureImage: signatureMode === 'drawn' ? signatureImage : '',
+        signatureImage: signatureMode === 'drawn' ? finalSignatureImage : '',
         typedName: signatureMode === 'typed' ? typedName.trim() : '',
         dni: cleanDni,
         dniEntered: dni.trim(),
@@ -1340,6 +1369,8 @@ function SigningRoom({ request, user, docu }) {
     if (signatureMode === 'typed' && !typedName.trim()) { alert('Completá tu nombre para la firma cursiva.'); return; }
     setBusy(true);
     try {
+      const finalSignatureImage = signatureMode === 'drawn' ? await trimSignatureDataUrl(signatureImage) : '';
+      if (finalSignatureImage) setSignatureImage(finalSignatureImage);
       const signDocument = httpsCallable(functions, 'signDocument');
       await signDocument({
         projectId: request.projectId,
@@ -1348,7 +1379,7 @@ function SigningRoom({ request, user, docu }) {
         fieldId: activeField.id,
         signatureField: activeField,
         signatureType: signatureMode,
-        signatureImage: signatureMode === 'drawn' ? signatureImage : '',
+        signatureImage: signatureMode === 'drawn' ? finalSignatureImage : '',
         typedName: signatureMode === 'typed' ? typedName.trim() : '',
         dni: cleanDni,
         dniEntered: dni.trim(),
@@ -1544,13 +1575,57 @@ function DocumentSurface({ url, fileName, contentType, fields = [], activeFieldI
   const isImage = (contentType || '').startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(fileName || '');
   const isPdf = (contentType || '').includes('pdf') || /\.pdf$/i.test(fileName || '');
   const className = `docPreview ${designer ? 'designer' : 'readonly'} ${placing ? 'placing' : 'navigating'}`;
-  if (isPdf) return <PdfDocumentSurface className={className} url={url} fileName={fileName} fields={fields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>;
-  if (isImage) return <ImageDocumentSurface className={className} url={url} fileName={fileName} fields={fields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>;
+  const navigationFields = designer ? [] : sortedSignatureFields(fields);
+  if (isPdf) return <PdfDocumentSurface className={className} url={url} fileName={fileName} fields={fields} navigationFields={navigationFields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>;
+  if (isImage) return <ImageDocumentSurface className={className} url={url} fileName={fileName} fields={fields} navigationFields={navigationFields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>;
   return <div className={className}><div className="previewFallback"><strong>{fileName}</strong><p>La vista previa completa depende del navegador. Para marcar campos visuales con precisión conviene subir PDF o imagen.</p></div></div>;
 }
 
-function ImageDocumentSurface({ className, url, fileName, fields, activeFieldId, onSelectField, signatures, designer, placing, draft, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
+function SignatureFieldNavigator({ fields = [], activeFieldId }) {
+  const ordered = sortedSignatureFields(fields);
+  const [targetIndex, setTargetIndex] = useState(0);
+  const [direction, setDirection] = useState('↓');
+  const fieldKey = ordered.map((f) => f.id).join('|');
+  useEffect(() => { setTargetIndex(0); }, [fieldKey]);
+  const activeIndex = ordered.findIndex((f) => f.id === activeFieldId);
+  const nextIndex = activeIndex >= 0 ? Math.min(activeIndex + 1, ordered.length - 1) : Math.min(targetIndex, Math.max(0, ordered.length - 1));
+  const target = ordered[nextIndex] || ordered[0];
+  useEffect(() => {
+    if (!target?.id) return undefined;
+    function updateDirection() {
+      const el = document.querySelector(`[data-signature-field-id=\"${escapeCssIdent(String(target.id))}\"]`);
+      const viewport = el?.closest('.pdfPageList') || el?.closest('.docPreview') || null;
+      if (!el || !viewport) { setDirection('↓'); return; }
+      const rect = el.getBoundingClientRect();
+      const bounds = viewport.getBoundingClientRect();
+      if (rect.top < bounds.top + 60) setDirection('↑');
+      else if (rect.bottom > bounds.bottom - 60) setDirection('↓');
+      else setDirection('→');
+    }
+    updateDirection();
+    const targetEl = document.querySelector(`[data-signature-field-id=\"${escapeCssIdent(String(target.id))}\"]`);
+    const scroller = targetEl?.closest('.pdfPageList') || targetEl?.closest('.docPreview') || window;
+    scroller.addEventListener?.('scroll', updateDirection, { passive: true });
+    window.addEventListener('resize', updateDirection);
+    return () => {
+      scroller.removeEventListener?.('scroll', updateDirection);
+      window.removeEventListener('resize', updateDirection);
+    };
+  }, [target?.id]);
+  if (!ordered.length) return null;
+  const label = ordered.length > 1 ? `Ir al recuadro ${nextIndex + 1} de ${ordered.length}` : 'Ir al recuadro de firma';
+  function jump() {
+    scrollToSignatureField(target.id);
+    setTargetIndex((nextIndex + 1) % ordered.length);
+  }
+  return <div className="signatureFieldNavigator">
+    <button type="button" onClick={jump}><span className="navArrow">{direction}</span><strong>{label}</strong><small>Buscá “Presionar para la firma” dentro del documento</small></button>
+  </div>;
+}
+
+function ImageDocumentSurface({ className, url, fileName, fields, navigationFields = [], activeFieldId, onSelectField, signatures, designer, placing, draft, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
   return <div className={className}>
+    <SignatureFieldNavigator fields={navigationFields} activeFieldId={activeFieldId}/>
     <div className="imagePage docPage">
       <img className="previewFile" src={url} alt={fileName || 'Documento'} draggable="false"/>
       <SignaturePageOverlay pageNumber={1} fields={fields} activeFieldId={activeFieldId} onSelectField={onSelectField} signatures={signatures} designer={designer} placing={placing} draft={draft} onPagePointerDown={onPagePointerDown} onPagePointerMove={onPagePointerMove} onPagePointerUp={onPagePointerUp} onPagePointerCancel={onPagePointerCancel}/>
@@ -1570,7 +1645,7 @@ async function loadPdfJs() {
   return pdfJsPromise;
 }
 
-function PdfDocumentSurface({ className, url, fileName, fields, activeFieldId, onSelectField, signatures, designer, placing, draft, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
+function PdfDocumentSurface({ className, url, fileName, fields, navigationFields = [], activeFieldId, onSelectField, signatures, designer, placing, draft, onPagePointerDown, onPagePointerMove, onPagePointerUp, onPagePointerCancel }) {
   const [pdf, setPdf] = useState(null);
   const [pageCount, setPageCount] = useState(0);
   const [error, setError] = useState('');
@@ -1597,6 +1672,7 @@ function PdfDocumentSurface({ className, url, fileName, fields, activeFieldId, o
   if (!pdf) return <div className={className}><div className="previewFallback"><strong>{fileName}</strong><p>Cargando vista previa del PDF...</p></div></div>;
 
   return <div className={className}>
+    <SignatureFieldNavigator fields={navigationFields} activeFieldId={activeFieldId}/>
     <div className="pdfPageList">
       {Array.from({ length: pageCount }, (_, i) => {
         const pageNumber = i + 1;
@@ -1654,9 +1730,10 @@ function SignaturePageOverlay({ pageNumber, fields, activeFieldId, onSelectField
     onPointerLeave={onPagePointerUp}
   >
     {pageFields.map((f) => designer
-      ? <div key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)}><span>{f.label || f.signerEmail}</span></div>
-      : <button type="button" key={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)} onClick={(e) => { e.preventDefault(); onSelectField?.(f.id); }}>
-        <span>{f.label || f.signerEmail}</span>
+      ? <div key={f.id} data-signature-field-id={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)}><span className="fieldLabel">{f.label || f.signerEmail}</span></div>
+      : <button type="button" key={f.id} data-signature-field-id={f.id} className={`signatureRect ${f.id === activeFieldId ? 'active' : ''}`} style={rectStyle(f)} onClick={(e) => { e.preventDefault(); onSelectField?.(f.id); }}>
+        <span className="signatureHintChip">Presionar para la firma <span aria-hidden="true">↘</span></span>
+        <span className="fieldLabel">{f.label || f.signerEmail}</span>
       </button>
     )}
     {pageSignatures.map((sig) => <div key={sig.field.id} className="signatureVisual" style={signatureVisualRectStyle(sig.field)}>{sig.type === 'drawn' ? <img src={sig.image} alt="Firma"/> : <span>{sig.typedName}</span>}</div>)}
@@ -1802,7 +1879,7 @@ function cropCanvasToInk(canvas) {
     }
   }
   if (maxX < minX || maxY < minY) return canvas.toDataURL('image/png');
-  const pad = Math.max(12, Math.round(Math.max(maxX - minX, maxY - minY) * 0.18));
+  const pad = Math.max(2, Math.round(Math.max(maxX - minX, maxY - minY) * 0.025));
   minX = Math.max(0, minX - pad);
   minY = Math.max(0, minY - pad);
   maxX = Math.min(width - 1, maxX + pad);
@@ -1814,6 +1891,28 @@ function cropCanvasToInk(canvas) {
   out.height = cropH;
   out.getContext('2d').drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
   return out.toDataURL('image/png');
+}
+
+
+function trimSignatureDataUrl(dataUrl = '') {
+  if (!String(dataUrl).startsWith('data:image/png;base64,')) return Promise.resolve(dataUrl);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, img.naturalWidth || img.width);
+        canvas.height = Math.max(1, img.naturalHeight || img.height);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        resolve(cropCanvasToInk(canvas));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
 }
 
 function useObjectUrl(file) {
