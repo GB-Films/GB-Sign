@@ -1815,7 +1815,11 @@ function PdfDocumentSurface({ className, url, fileName, fields, navigationFields
 
   return <div className={className}>
     <SignatureFieldNavigator fields={navigationFields} activeFieldId={activeFieldId}/>
-    <div className="pdfPageList">
+    <div className="pdfScrollMeta">
+      <span><strong>{pageCount}</strong> {pageCount === 1 ? 'página' : 'páginas'}</span>
+      <span>Desplazá dentro del documento para recorrerlo</span>
+    </div>
+    <div className="pdfPageList" role="region" tabIndex="0" aria-label={`Documento PDF de ${pageCount} ${pageCount === 1 ? 'página' : 'páginas'}`}>
       {Array.from({ length: pageCount }, (_, i) => {
         const pageNumber = i + 1;
         return <PdfPageCanvas key={pageNumber} pdf={pdf} pageNumber={pageNumber}>
@@ -1827,34 +1831,93 @@ function PdfDocumentSurface({ className, url, fileName, fields, navigationFields
 }
 
 function PdfPageCanvas({ pdf, pageNumber, children }) {
+  const pageRef = useRef(null);
   const canvasRef = useRef(null);
+  const [pdfPage, setPdfPage] = useState(null);
+  const [pageRatio, setPageRatio] = useState('612 / 792');
+  const [isNearViewport, setIsNearViewport] = useState(false);
   const [rendering, setRendering] = useState(true);
+  const [renderError, setRenderError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    let renderTask = null;
+    setPdfPage(null);
     setRendering(true);
+    setRenderError('');
     pdf.getPage(pageNumber).then((page) => {
       if (cancelled) return;
-      const canvas = canvasRef.current;
-      const baseViewport = page.getViewport({ scale: 1.35 });
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.floor(baseViewport.width * dpr);
-      canvas.height = Math.floor(baseViewport.height * dpr);
-      canvas.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
-      const ctx = canvas.getContext('2d');
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      renderTask = page.render({ canvasContext: ctx, viewport: baseViewport });
-      return renderTask.promise;
-    }).then(() => { if (!cancelled) setRendering(false); }).catch((err) => {
-      if (!cancelled) console.warn('No se pudo renderizar página PDF:', err.message);
+      const viewport = page.getViewport({ scale: 1 });
+      setPageRatio(`${viewport.width} / ${viewport.height}`);
+      setPdfPage(page);
+    }).catch((err) => {
+      if (!cancelled) {
+        setRendering(false);
+        setRenderError(err?.message || 'No se pudo preparar esta página.');
+      }
     });
-    return () => { cancelled = true; renderTask?.cancel?.(); };
+    return () => { cancelled = true; };
   }, [pdf, pageNumber]);
 
-  return <div className="pdfPage docPage">
+  useEffect(() => {
+    const target = pageRef.current;
+    if (!target || typeof IntersectionObserver === 'undefined') {
+      setIsNearViewport(true);
+      return undefined;
+    }
+    const scrollContainer = target.closest('.pdfPageList');
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setIsNearViewport(true);
+        observer.disconnect();
+      }
+    }, {
+      root: scrollContainer,
+      rootMargin: '1200px 0px',
+      threshold: 0.01,
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [pdf, pageNumber]);
+
+  useEffect(() => {
+    if (!pdfPage || !isNearViewport) return undefined;
+    let cancelled = false;
+    let renderTask = null;
+    setRendering(true);
+    setRenderError('');
+    try {
+      const canvas = canvasRef.current;
+      if (!canvas) return undefined;
+      const viewport = pdfPage.getViewport({ scale: 1.5 });
+      const outputScale = Math.min(window.devicePixelRatio || 1, 1.5);
+      canvas.width = Math.floor(viewport.width * outputScale);
+      canvas.height = Math.floor(viewport.height * outputScale);
+      const context = canvas.getContext('2d', { alpha: false });
+      const transform = outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0];
+      renderTask = pdfPage.render({ canvasContext: context, transform, viewport });
+      renderTask.promise.then(() => {
+        if (!cancelled) setRendering(false);
+      }).catch((err) => {
+        if (cancelled || err?.name === 'RenderingCancelledException') return;
+        setRendering(false);
+        setRenderError(err?.message || 'No se pudo mostrar esta página.');
+        console.warn('No se pudo renderizar página PDF:', err?.message || err);
+      });
+    } catch (err) {
+      setRendering(false);
+      setRenderError(err?.message || 'No se pudo mostrar esta página.');
+    }
+    return () => {
+      cancelled = true;
+      renderTask?.cancel?.();
+    };
+  }, [pdfPage, isNearViewport]);
+
+  return <div ref={pageRef} className="pdfPage docPage" style={{ aspectRatio: pageRatio }}>
     <div className="pageLabel">Página {pageNumber}</div>
     <canvas ref={canvasRef} className={`pdfCanvas ${rendering ? 'loading' : ''}`}/>
+    {rendering && <div className="pageLoading" aria-hidden="true"><span/></div>}
+    {renderError && <div className="pageRenderError"><strong>No pudimos mostrar esta página.</strong><small>{renderError}</small></div>}
     {children}
   </div>;
 }

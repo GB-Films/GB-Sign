@@ -1868,18 +1868,48 @@ small {
 }
 
 .pdfPageList {
-  height: 720px;
+  height: clamp(520px, 72vh, 820px);
   padding: 18px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: scroll;
   display: grid;
   gap: 18px;
+  align-content: start;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   background: #dfe2de;
+}
+
+.pdfPageList:focus-visible {
+  outline: 3px solid rgba(91, 120, 29, .28);
+  outline-offset: -3px;
+}
+
+.pdfScrollMeta {
+  min-height: 38px;
+  padding: 8px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, .94);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pdfScrollMeta strong {
+  color: var(--ink);
 }
 
 .docPage {
   position: relative;
   width: min(100%, 920px);
   max-width: 920px;
+  aspect-ratio: 612 / 792;
   margin: 0 auto;
   overflow: hidden;
   background: #fff;
@@ -1892,14 +1922,54 @@ small {
 }
 
 .pdfCanvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
   background: #fff;
 }
 
 .pdfCanvas.loading {
-  opacity: .4;
+  opacity: 0;
+}
+
+.pageLoading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  background: #fff;
+  pointer-events: none;
+}
+
+.pageLoading span {
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(100deg, transparent 30%, rgba(231, 234, 228, .8) 48%, transparent 66%);
+  animation: pageShimmer 1.25s ease-in-out infinite;
+}
+
+.pageRenderError {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 24px;
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  background: #fff;
+  color: var(--danger);
+  text-align: center;
+}
+
+.pageRenderError small {
+  max-width: 460px;
+}
+
+@keyframes pageShimmer {
+  to { transform: translateX(100%); }
 }
 
 .pageLabel {
