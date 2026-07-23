@@ -1873,6 +1873,8 @@ small {
   overflow-x: hidden;
   overflow-y: scroll;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: max-content;
   gap: 18px;
   align-content: start;
   overscroll-behavior: contain;
@@ -1910,6 +1912,8 @@ small {
   width: min(100%, 920px);
   max-width: 920px;
   aspect-ratio: 612 / 792;
+  align-self: start;
+  justify-self: center;
   margin: 0 auto;
   overflow: hidden;
   background: #fff;

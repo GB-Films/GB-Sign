@@ -1834,7 +1834,8 @@ function PdfPageCanvas({ pdf, pageNumber, children }) {
   const pageRef = useRef(null);
   const canvasRef = useRef(null);
   const [pdfPage, setPdfPage] = useState(null);
-  const [pageRatio, setPageRatio] = useState('612 / 792');
+  const [pageAspect, setPageAspect] = useState(792 / 612);
+  const [displayHeight, setDisplayHeight] = useState(0);
   const [isNearViewport, setIsNearViewport] = useState(false);
   const [rendering, setRendering] = useState(true);
   const [renderError, setRenderError] = useState('');
@@ -1847,7 +1848,7 @@ function PdfPageCanvas({ pdf, pageNumber, children }) {
     pdf.getPage(pageNumber).then((page) => {
       if (cancelled) return;
       const viewport = page.getViewport({ scale: 1 });
-      setPageRatio(`${viewport.width} / ${viewport.height}`);
+      setPageAspect(viewport.height / viewport.width);
       setPdfPage(page);
     }).catch((err) => {
       if (!cancelled) {
@@ -1857,6 +1858,29 @@ function PdfPageCanvas({ pdf, pageNumber, children }) {
     });
     return () => { cancelled = true; };
   }, [pdf, pageNumber]);
+
+  useEffect(() => {
+    const target = pageRef.current;
+    const scrollContainer = target?.closest('.pdfPageList');
+    if (!target || !scrollContainer) return undefined;
+    const updateHeight = () => {
+      const targetWidth = target.getBoundingClientRect().width;
+      const containerStyle = window.getComputedStyle(scrollContainer);
+      const horizontalPadding = parseFloat(containerStyle.paddingLeft || '0') + parseFloat(containerStyle.paddingRight || '0');
+      const fallbackWidth = Math.min(920, Math.max(240, scrollContainer.clientWidth - horizontalPadding));
+      const pageWidth = targetWidth > 0 ? targetWidth : fallbackWidth;
+      const nextHeight = Math.max(280, Math.round(pageWidth * pageAspect));
+      setDisplayHeight((current) => Math.abs(current - nextHeight) > 1 ? nextHeight : current);
+    };
+    updateHeight();
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateHeight) : null;
+    resizeObserver?.observe(scrollContainer);
+    window.addEventListener('resize', updateHeight);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updateHeight);
+    };
+  }, [pageAspect, pdf, pageNumber]);
 
   useEffect(() => {
     const target = pageRef.current;
@@ -1913,7 +1937,15 @@ function PdfPageCanvas({ pdf, pageNumber, children }) {
     };
   }, [pdfPage, isNearViewport]);
 
-  return <div ref={pageRef} className="pdfPage docPage" style={{ aspectRatio: pageRatio }}>
+  return <div
+    ref={pageRef}
+    className="pdfPage docPage"
+    style={{
+      aspectRatio: `1 / ${pageAspect}`,
+      height: displayHeight ? `${displayHeight}px` : undefined,
+      minHeight: displayHeight ? `${displayHeight}px` : undefined,
+    }}
+  >
     <div className="pageLabel">Página {pageNumber}</div>
     <canvas ref={canvasRef} className={`pdfCanvas ${rendering ? 'loading' : ''}`}/>
     {rendering && <div className="pageLoading" aria-hidden="true"><span/></div>}
