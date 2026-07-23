@@ -8,8 +8,10 @@ import { httpsCallable } from 'firebase/functions';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import {
-  CheckCircle2, ClipboardCopy, Download, ExternalLink, FileSignature, FolderPlus,
-  LockKeyhole, LogOut, Mail, PenLine, QrCode, Settings, ShieldCheck, Smartphone, Trash2, Upload, UserCircle, Users
+  ArrowRight, CheckCircle2, ChevronDown, ClipboardCopy, Download, ExternalLink,
+  FileCheck2, FileSignature, FolderKanban, FolderPlus, LayoutDashboard,
+  LockKeyhole, LogOut, Mail, Menu, PenLine, Plus, QrCode, Settings,
+  ShieldCheck, Smartphone, Trash2, Upload, UserCircle, Users, X
 } from 'lucide-react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { auth, db, provider, storage, functions } from './firebase';
@@ -120,6 +122,8 @@ export default function App() {
   const [mobileCaptureRequestId, setMobileCaptureRequestId] = useState(() => getRouteParams().mobileCapture);
   const [captureSessionId, setCaptureSessionId] = useState(() => getRouteParams().captureSession);
   const [focusedRequestId, setFocusedRequestId] = useState('');
+  const [activeView, setActiveView] = useState('overview');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     const onPop = () => {
@@ -138,7 +142,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || loadingAdmin) return;
+    setProjects([]);
+    if (isAdmin) {
+      return onSnapshot(collection(db, 'projects'), (snap) => {
+        setProjects(snap.docs
+          .map((projectDoc) => ({ id: projectDoc.id, ...projectDoc.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+      }, (err) => console.warn('No se pudieron cargar todos los proyectos:', err.message));
+    }
     const ownedQ = query(collection(db, 'projects'), where('ownerUid', '==', user.uid));
     const sharedQ = query(collection(db, 'projects'), where('collaboratorEmails', 'array-contains', normalizeEmail(user.email)));
     const cache = new Map();
@@ -147,7 +159,7 @@ export default function App() {
     const unsubOwned = onSnapshot(ownedQ, (snap) => { snap.docs.forEach((d) => cache.set(d.id, { id: d.id, ...d.data() })); publish(); }, onErr);
     const unsubShared = onSnapshot(sharedQ, (snap) => { snap.docs.forEach((d) => cache.set(d.id, { id: d.id, ...d.data() })); publish(); }, onErr);
     return () => { unsubOwned(); unsubShared(); };
-  }, [user]);
+  }, [user, isAdmin, loadingAdmin]);
 
   useEffect(() => {
     if (!user) return;
@@ -171,65 +183,191 @@ export default function App() {
     return () => unsubs.forEach((u) => u());
   }, [documents]);
 
+  useEffect(() => {
+    if (projects.length && !projects.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [projects, selectedProjectId]);
+
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
   const canManageApp = isAdmin;
   const isSignerOnly = !canManageApp && projects.length === 0;
 
-  if (loading || loadingAdmin) return <main className="shell"><Card>Cargando...</Card></main>;
+  const roleLabel = canManageApp ? 'Administrador' : projects.length ? 'Colaborador' : 'Firmante';
+  const pageTitles = {
+    overview: ['Resumen', 'Todo lo importante, en un solo lugar.'],
+    projects: ['Proyectos', 'Documentos, participantes y evidencia por proyecto.'],
+    signatures: ['Mis firmas', 'Revisá tus solicitudes y completá las pendientes.'],
+  };
+  const [pageTitle, pageDescription] = pageTitles[activeView] || pageTitles.overview;
+  const completedDocuments = documents.filter((item) => statusFor(item, signaturesByDoc[item.id] || []) === 'Completo').length;
+
+  if (loading || loadingAdmin) return <LoadingScreen />;
   if (!user) return <Login />;
   if (mobileCaptureRequestId) return <MobileCaptureRoute requestId={mobileCaptureRequestId} sessionId={captureSessionId} pending={pending} user={user} />;
   if (mobileRequestId) return <MobileSignRoute requestId={mobileRequestId} pending={pending} user={user} />;
 
   const focusedRequest = pending.find((item) => item.id === (focusedRequestId || directRequestId));
-  if (focusedRequest) return <FocusedSignerPage request={focusedRequest} user={user} roleLabel={canManageApp ? 'Administrador' : projects.length ? 'Colaborador' : 'Firmante'} onClose={() => { setFocusedRequestId(''); if (directRequestId) setDirectRequestId(''); }} />;
+  if (focusedRequest) return <FocusedSignerPage request={focusedRequest} user={user} roleLabel={roleLabel} onClose={() => { setFocusedRequestId(''); if (directRequestId) setDirectRequestId(''); }} />;
 
   return (
-    <main className="shell">
-      <header className="topbar">
-        <div>
-          <h1>GB Sign</h1>
-          <p>Gestión interna de documentos y firma electrónica con acceso externo limitado por mail.</p>
+    <main className="appShell">
+      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''}`}>
+        <div className="sidebarTop">
+          <AppBrand />
+          <button className="navClose" type="button" onClick={() => setMobileNavOpen(false)} aria-label="Cerrar menú"><X size={20}/></button>
         </div>
-        <UserBox user={user} roleLabel={canManageApp ? 'Administrador' : projects.length ? 'Colaborador' : 'Firmante'} roleTone={canManageApp ? 'good' : projects.length ? 'neutral' : 'warn'} />
-      </header>
+        <nav className="mainNav" aria-label="Navegación principal">
+          {!isSignerOnly && <NavButton active={activeView === 'overview'} onClick={() => { setActiveView('overview'); setMobileNavOpen(false); }} icon={<LayoutDashboard size={19}/>}>Resumen</NavButton>}
+          {!isSignerOnly && <NavButton active={activeView === 'projects'} onClick={() => { setActiveView('projects'); setMobileNavOpen(false); }} icon={<FolderKanban size={19}/>}>Proyectos <span className="navCount">{projects.length}</span></NavButton>}
+          <NavButton active={activeView === 'signatures' || isSignerOnly} onClick={() => { setActiveView('signatures'); setMobileNavOpen(false); }} icon={<FileCheck2 size={19}/>}>Mis firmas <span className="navCount">{pending.length}</span></NavButton>
+        </nav>
+        <div className="sidebarNote">
+          <ShieldCheck size={18}/>
+          <div><strong>Firma con evidencia</strong><span>Identidad, consentimiento, fecha y hash protegidos.</span></div>
+        </div>
+        <span className="sidebarFooter">GB Films · Documento seguro</span>
+      </aside>
 
+      {mobileNavOpen && <button type="button" className="sidebarBackdrop" onClick={() => setMobileNavOpen(false)} aria-label="Cerrar menú"/>}
 
-      <section className={`grid ${isSignerOnly ? 'one' : 'two'}`}>
-        {!isSignerOnly && (
-          <Card>
-            <div className="cardHead"><h2>Proyectos internos</h2><FolderPlus size={22}/></div>
-            {canManageApp ? <CreateProject onCreated={setSelectedProjectId}/> : <p className="muted">Solo los administradores pueden crear proyectos. Los colaboradores pueden trabajar dentro de los proyectos donde fueron agregados.</p>}
-            <div className="list">
-              {projects.map((p) => <button key={p.id} className={`row ${p.id === selectedProjectId ? 'active' : ''}`} onClick={() => setSelectedProjectId(p.id)}>
-                <strong>{p.name}</strong><span>{p.client || 'Sin cliente'} · {fmtDate(p.createdAt)}</span>
-              </button>)}
-              {!projects.length && <Empty title="Sin proyectos internos">Cuando seas administrador o colaborador de un proyecto, aparecerá acá.</Empty>}
-            </div>
-          </Card>
-        )}
-
-        <Card>
-          <div className="cardHead"><h2>Documentos para firmar</h2><FileSignature size={22}/></div>
-          <div className="list">
-            {directRequestId && pending.length > 0 && !pending.some((d) => d.id === directRequestId) && <div className="directLinkWarning"><strong>Link de firma detectado.</strong><span>No encontramos ese documento para este mail. Verificá que hayas ingresado con el Google exacto que fue invitado a firmar.</span></div>}
-            {pending.map((d) => <PendingDoc key={d.id} request={d} user={user} directOpen={directRequestId === d.id} onFocus={setFocusedRequestId}/>) }
-            {!pending.length && <Empty title="Sin documentos asignados">Cuando pidan una firma con este mail de Google, el documento aparecerá acá.</Empty>}
+      <section className="appMain">
+        <header className="topbar">
+          <div className="topbarTitle">
+            <button className="menuButton" type="button" onClick={() => setMobileNavOpen(true)} aria-label="Abrir menú"><Menu size={21}/></button>
+            <div><span className="eyebrow">{pageTitle}</span><p>{pageDescription}</p></div>
           </div>
-        </Card>
-      </section>
+          <UserBox user={user} roleLabel={roleLabel} />
+        </header>
 
-      {selectedProject && <ProjectPanel project={selectedProject} documents={documents} signaturesByDoc={signaturesByDoc} user={user} isAdmin={isAdmin} onProjectDeleted={() => setSelectedProjectId('')}/>} 
+        <div className="pageContent">
+          {isSignerOnly && <SignerWelcome user={user} />}
+
+          {!isSignerOnly && activeView === 'overview' && <>
+            <section className="welcomePanel">
+              <div>
+                <span className="eyebrow">Centro de actividad</span>
+                <h1>Hola, {user.displayName?.split(' ')[0] || 'bienvenido'}.</h1>
+                <p>Seguimiento simple para que cada contrato llegue a firma y quede respaldado.</p>
+              </div>
+              <Button type="button" onClick={() => setActiveView('projects')}><Plus size={18}/> Nuevo documento</Button>
+            </section>
+
+            <section className="statsGrid" aria-label="Resumen de actividad">
+              <StatCard label={canManageApp ? 'Proyectos visibles' : 'Proyectos'} value={projects.length} detail={canManageApp ? 'Acceso administrativo total' : 'Propios y compartidos'} icon={<FolderKanban size={19}/>}/>
+              <StatCard label="Solicitudes asignadas" value={pending.length} detail="Documentos vinculados a tu mail" icon={<FileSignature size={19}/>}/>
+              <StatCard label="Completados en proyecto" value={`${completedDocuments}/${documents.length}`} detail={selectedProject?.name || 'Seleccioná un proyecto'} icon={<CheckCircle2 size={19}/>}/>
+            </section>
+
+            <section className="dashboardGrid">
+              <Card className="dashboardCard">
+                <div className="cardHead">
+                  <div><span className="eyebrow">Espacios de trabajo</span><h2>Proyectos recientes</h2></div>
+                  <button className="textAction" type="button" onClick={() => setActiveView('projects')}>Ver todos <ArrowRight size={15}/></button>
+                </div>
+                <ProjectList projects={projects.slice(0, 4)} selectedProjectId={selectedProjectId} onSelect={(id) => { setSelectedProjectId(id); setActiveView('projects'); }}/>
+              </Card>
+              <Card className="dashboardCard">
+                <div className="cardHead">
+                  <div><span className="eyebrow">Tu bandeja</span><h2>Firmas asignadas</h2></div>
+                  <button className="textAction" type="button" onClick={() => setActiveView('signatures')}>Ver todas <ArrowRight size={15}/></button>
+                </div>
+                <PendingList requests={pending.slice(0, 3)} user={user} directRequestId={directRequestId} onFocus={setFocusedRequestId}/>
+              </Card>
+            </section>
+          </>}
+
+          {!isSignerOnly && activeView === 'projects' && <>
+            <section className="pageHeading">
+              <div><span className="eyebrow">Gestión interna</span><h1>Proyectos</h1><p>Organizá documentos, firmantes y evidencia sin perder el contexto.</p></div>
+            </section>
+            <Card className="projectDirectory">
+              <div className="cardHead"><div><h2>Todos los proyectos</h2><p className="muted">{canManageApp ? 'Como administrador podés ver y gestionar todos los espacios.' : 'Proyectos propios y compartidos con vos.'}</p></div><FolderPlus size={22}/></div>
+              {canManageApp && <CreateProject onCreated={(id) => { setSelectedProjectId(id); }}/>}
+              <ProjectList projects={projects} selectedProjectId={selectedProjectId} onSelect={setSelectedProjectId}/>
+            </Card>
+            {selectedProject && <ProjectPanel project={selectedProject} documents={documents} signaturesByDoc={signaturesByDoc} user={user} isAdmin={isAdmin} onProjectDeleted={() => setSelectedProjectId('')}/>}
+          </>}
+
+          {(activeView === 'signatures' || isSignerOnly) && <>
+            {!isSignerOnly && <section className="pageHeading"><div><span className="eyebrow">Bandeja personal</span><h1>Mis firmas</h1><p>Cada solicitud asociada a tu cuenta de Google, con su estado y descargas.</p></div></section>}
+            <Card className="signatureInbox">
+              <div className="cardHead"><div><h2>Documentos asignados</h2><p className="muted">{pending.length ? `${pending.length} ${pending.length === 1 ? 'solicitud' : 'solicitudes'} en total` : 'Tu bandeja está al día'}</p></div><FileSignature size={22}/></div>
+              <PendingList requests={pending} user={user} directRequestId={directRequestId} onFocus={setFocusedRequestId}/>
+            </Card>
+          </>}
+        </div>
+      </section>
     </main>
   );
 }
 
+function LoadingScreen() {
+  return <main className="loadingScreen"><div className="loadingMark"><ShieldCheck size={28}/></div><div className="loadingBar"><span/></div><p>Preparando tu espacio seguro</p></main>;
+}
+
+function AppBrand() {
+  return <div className="brand"><span className="brandMark"><FileSignature size={20}/></span><span><strong>GB Sign</strong><small>Firma electrónica</small></span></div>;
+}
+
+function NavButton({ active, onClick, icon, children }) {
+  return <button type="button" className={`navButton ${active ? 'active' : ''}`} onClick={onClick}>{icon}<span>{children}</span></button>;
+}
+
+function StatCard({ label, value, detail, icon }) {
+  return <Card className="statCard"><div className="statIcon">{icon}</div><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></Card>;
+}
+
+function ProjectList({ projects, selectedProjectId, onSelect }) {
+  if (!projects.length) return <Empty title="Todavía no hay proyectos">Creá el primero para empezar a organizar documentos y firmas.</Empty>;
+  return <div className="projectList">{projects.map((project) => <button key={project.id} type="button" className={`projectItem ${project.id === selectedProjectId ? 'active' : ''}`} onClick={() => onSelect(project.id)}>
+    <span className="projectGlyph"><FolderKanban size={18}/></span>
+    <span className="projectMeta"><strong>{project.name}</strong><small>{project.client || 'Sin cliente'} · {fmtDate(project.createdAt)}</small></span>
+    <ArrowRight size={16}/>
+  </button>)}</div>;
+}
+
+function PendingList({ requests, user, directRequestId, onFocus }) {
+  return <div className="list pendingList">
+    {directRequestId && requests.length > 0 && !requests.some((item) => item.id === directRequestId) && <div className="directLinkWarning"><strong>No encontramos el documento de este link.</strong><span>Verificá que hayas ingresado con la cuenta de Google que recibió la invitación.</span></div>}
+    {requests.map((request) => <PendingDoc key={request.id} request={request} user={user} directOpen={directRequestId === request.id} onFocus={onFocus}/>)}
+    {!requests.length && <Empty title="No tenés firmas pendientes">Las solicitudes nuevas vinculadas a este correo van a aparecer acá.</Empty>}
+  </div>;
+}
+
+function SignerWelcome({ user }) {
+  return <section className="signerWelcome"><span className="welcomeIcon"><FileCheck2 size={24}/></span><div><span className="eyebrow">Portal de firmante</span><h1>Tu bandeja de documentos</h1><p>Ingresaste como <strong>{normalizeEmail(user.email)}</strong>. Sólo vas a ver documentos asignados a esta cuenta.</p></div></section>;
+}
+
 function Login() {
   const { sign: directRequestId, mobileSign: mobileRequestId, mobileCapture: mobileCaptureRequestId } = getRouteParams();
-  return <main className="login"><Card className="loginCard"><ShieldCheck size={46}/><h1>GB Sign</h1><p>Ingresá con Google. Si sos firmante, solo vas a ver los documentos asignados exactamente a tu correo.</p>{(directRequestId || mobileRequestId || mobileCaptureRequestId) && <div className="directLoginNotice"><strong>{mobileCaptureRequestId ? 'Captura de firma desde celular detectada.' : mobileRequestId ? 'Firma desde celular detectada.' : 'Link directo de firma detectado.'}</strong><span>Después de iniciar sesión vas a ir directo al documento si este Google es el mail invitado.</span></div>}<Button onClick={() => signInWithPopup(auth, provider)}>Ingresar con Google</Button></Card></main>;
+  return <main className="login">
+    <section className="loginFrame">
+      <div className="loginStory">
+        <AppBrand />
+        <div className="loginHeadline"><span className="eyebrow">Contratos, sin fricción</span><h1>Firmas claras.<br/>Evidencia sólida.</h1><p>Un espacio simple para revisar, firmar y conservar cada documento entre las partes.</p></div>
+        <div className="trustList">
+          <span><CheckCircle2 size={17}/> Identidad vinculada a Google</span>
+          <span><CheckCircle2 size={17}/> Documento protegido por hash</span>
+          <span><CheckCircle2 size={17}/> Certificado de evidencia descargable</span>
+        </div>
+        <small className="loginLegal">Firma electrónica con evidencia técnica · GB Films</small>
+      </div>
+      <div className="loginAccess">
+        <Card className="loginCard">
+          <span className="accessIcon"><LockKeyhole size={22}/></span>
+          <div><span className="eyebrow">Acceso seguro</span><h2>Entrá a tu cuenta</h2><p>Usá el mismo correo de Google con el que recibiste la invitación o administrás proyectos.</p></div>
+          {(directRequestId || mobileRequestId || mobileCaptureRequestId) && <div className="directLoginNotice"><strong>{mobileCaptureRequestId ? 'Firma iniciada desde el celular' : mobileRequestId ? 'Solicitud móvil detectada' : 'Tenés un documento esperando'}</strong><span>Al ingresar vas a continuar directamente con esta solicitud.</span></div>}
+          <Button className="googleButton" onClick={() => signInWithPopup(auth, provider)}><span className="googleG">G</span> Continuar con Google <ArrowRight size={17}/></Button>
+          <p className="privacyNote"><ShieldCheck size={15}/> Sólo mostramos información vinculada a tu cuenta.</p>
+        </Card>
+      </div>
+    </section>
+  </main>;
 }
 
 
-function UserBox({ user, roleLabel, roleTone = 'neutral' }) {
+function UserBox({ user, roleLabel }) {
   const [open, setOpen] = useState(false);
   async function copyUid() {
     await navigator.clipboard?.writeText(user.uid);
@@ -237,8 +375,8 @@ function UserBox({ user, roleLabel, roleTone = 'neutral' }) {
   return <div className="userboxWrap">
     <button type="button" className="userbox userboxButton" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
       {user.photoURL ? <img src={user.photoURL} alt="" /> : <UserCircle size={30}/>} 
-      <span>{user.displayName || user.email}</span>
-      <Badge tone={roleTone}>{roleLabel}</Badge>
+      <span className="userboxIdentity"><strong>{user.displayName || 'Usuario'}</strong><small>{roleLabel}</small></span>
+      <ChevronDown size={15}/>
     </button>
     {open && <div className="userMenu">
       <strong>{user.displayName || 'Usuario'}</strong>
@@ -257,7 +395,7 @@ function FocusedSignerPage({ request, user, roleLabel, onClose }) {
         <p>{request.title || request.fileName}</p>
       </div>
       <div className="signFocusHeaderActions">
-        <UserBox user={user} roleLabel={roleLabel} roleTone="warn" />
+        <UserBox user={user} roleLabel={roleLabel} />
         <Button variant="ghost" type="button" onClick={onClose}>Volver</Button>
       </div>
     </header>
@@ -299,7 +437,9 @@ function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin, onPr
   const isOwner = project.ownerUid === user.uid;
   const canManageMembers = isAdmin || isOwner;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
+  const completeCount = documents.filter((item) => statusFor(item, signaturesByDoc[item.id] || []) === 'Completo').length;
 
   async function deleteProject() {
     if (!isAdmin) return;
@@ -319,23 +459,25 @@ function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin, onPr
   }
 
   return <section className="project">
-    <div className="sectionTitle projectTitle">
-      <div><h2>{project.name}</h2><Badge>{project.client || 'Proyecto interno'}</Badge></div>
-      <div className="actions"><Button variant="ghost" type="button" onClick={() => setSettingsOpen((v) => !v)}><Settings size={16}/> Configuración</Button>{isAdmin && <Button variant="danger" type="button" onClick={deleteProject} disabled={deletingProject}><Trash2 size={16}/>{deletingProject ? 'Borrando...' : 'Borrar proyecto'}</Button>}</div>
+    <div className="projectOverview">
+      <div className="projectIdentity"><span className="projectHeroIcon"><FolderKanban size={23}/></span><div><span className="eyebrow">Proyecto activo</span><h2>{project.name}</h2><p>{project.client || 'Proyecto interno'} · {documents.length} {documents.length === 1 ? 'documento' : 'documentos'} · {completeCount} completos</p></div></div>
+      <div className="actions">
+        <Button type="button" onClick={() => setUploadOpen((value) => !value)}><Plus size={16}/>{uploadOpen ? 'Cerrar carga' : 'Nuevo documento'}</Button>
+        <Button variant="ghost" type="button" onClick={() => setSettingsOpen((value) => !value)}><Settings size={16}/> Configuración</Button>
+      </div>
     </div>
 
     {settingsOpen && <Card className="settingsCard">
-      <div className="cardHead"><h3>Configuración del proyecto</h3><Users size={22}/></div>
+      <div className="cardHead"><div><span className="eyebrow">Accesos</span><h3>Equipo del proyecto</h3></div><Button variant="ghost" type="button" onClick={() => setSettingsOpen(false)}>Cerrar</Button></div>
       <Members project={project} currentUser={user} canManage={canManageMembers}/>
+      {isAdmin && <div className="dangerZone"><div><strong>Eliminar proyecto</strong><small>Borra documentos, solicitudes, firmas y archivos asociados.</small></div><Button variant="danger" type="button" onClick={deleteProject} disabled={deletingProject}><Trash2 size={16}/>{deletingProject ? 'Borrando...' : 'Borrar proyecto'}</Button></div>}
     </Card>}
 
-    <section className="grid one">
-      <Card><div className="cardHead"><h3>Cargar documento y solicitar firmas</h3><Upload size={22}/></div><UploadDocument project={project}/></Card>
-    </section>
-    <Card><h3>Documentos del proyecto</h3><div className="table">
+    {uploadOpen && <Card className="uploadCard"><div className="cardHead"><div><span className="eyebrow">Nueva solicitud</span><h3>Cargar documento</h3><p className="muted">Definí los firmantes y marcá el lugar exacto de cada firma.</p></div><Upload size={22}/></div><UploadDocument project={project}/></Card>}
+    <Card className="documentsCard"><div className="cardHead"><div><span className="eyebrow">Archivo del proyecto</span><h3>Documentos</h3></div><Badge tone={completeCount === documents.length && documents.length ? 'good' : 'neutral'}>{completeCount}/{documents.length} completos</Badge></div><div className="table">
       <div className="tr th"><span>Documento</span><span>Firmantes externos</span><span>Estado</span><span>Acciones</span></div>
       {documents.map((d) => <DocumentRow key={d.id} project={project} docu={d} signatures={signaturesByDoc[d.id] || []} isAdmin={isAdmin}/>) }
-    </div>{!documents.length && <Empty title="Sin documentos">Subí un PDF, imagen o documento para solicitar firmas.</Empty>}</Card>
+    </div>{!documents.length && <Empty title="Este proyecto todavía está vacío">Usá “Nuevo documento” para cargar el contrato y solicitar las firmas.</Empty>}</Card>
   </section>;
 }
 
@@ -543,7 +685,7 @@ function DocumentRow({ project, docu, signatures, isAdmin }) {
   }
 
   return <>
-    <div className="tr"><span><strong>{docu.title}</strong><small>{docu.fileName}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span>{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions adminActions">
+    <div className="tr"><span data-label="Documento"><strong>{docu.title}</strong><small>{docu.fileName}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span data-label="Firmantes">{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span data-label="Estado"><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions adminActions" data-label="Acciones">
       <IconAction label="Ver original" onClick={openFile}><ExternalLink size={16}/></IconAction>
       <IconAction label="Links y QR" onClick={() => setShareOpen((v)=>!v)} active={shareOpen}><QrCode size={16}/></IconAction>
       <IconAction label="Campos de firma" onClick={() => setEditFields((v)=>!v)} active={editFields}><PenLine size={16}/></IconAction>
@@ -1234,7 +1376,7 @@ function MobileFullSigningRoom({ request, user }) {
   }
 
   async function submit() {
-    if (!activeField || !fieldClicked) { alert('Primero tocá el recuadro naranja de firma dentro del documento.'); return; }
+    if (!activeField || !fieldClicked) { alert('Primero tocá el recuadro de firma marcado dentro del documento.'); return; }
     if (signatureMode === 'drawn' && !signatureImage) { alert('Dibujá tu firma con el dedo o elegí firma cursiva.'); return; }
     if (signatureMode === 'typed' && !typedName.trim()) { alert('Completá tu nombre para la firma cursiva.'); return; }
     if (!cleanDni || cleanDni.length < 6) { alert('Completá tu DNI con números.'); return; }
@@ -1276,7 +1418,7 @@ function MobileFullSigningRoom({ request, user }) {
 
   return <Card className="mobileSignCard mobileFullCard">
     <div className="mobileSignTop"><ShieldCheck size={34}/><div><h1>Revisar y firmar</h1><p>{docu?.title || request.title || request.fileName || 'Documento'}</p></div></div>
-    <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso 1: tocá el recuadro naranja en el documento'}</strong><span>{fieldClicked ? 'Ahora completá tu firma, DNI y consentimiento.' : 'Revisá el documento y tocá el campo de firma asignado a tu mail.'}</span></div>
+    <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso 1: tocá el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ahora completá tu firma, DNI y consentimiento.' : 'Revisá el documento y tocá el campo de firma asignado a tu correo.'}</span></div>
     {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
     <div id="mobile-signature-controls" className="mobileControlStack">
       <Card>
@@ -1361,7 +1503,7 @@ function SigningRoom({ request, user, docu }) {
   }
 
   async function sign() {
-    if (!fieldClicked || !activeField) { alert('Primero tenés que presionar el recuadro naranja de firma dentro del documento.'); return; }
+    if (!fieldClicked || !activeField) { alert('Primero tenés que presionar el recuadro de firma marcado dentro del documento.'); return; }
     if (!cleanDni || cleanDni.length < 6) { alert('Completá tu DNI con números.'); return; }
     if (!dniConfirmed) { alert('Tenés que confirmar que el DNI ingresado es correcto.'); return; }
     if (!consent) { alert('Tenés que aceptar el consentimiento de firma electrónica.'); return; }
@@ -1405,7 +1547,7 @@ function SigningRoom({ request, user, docu }) {
 
   return <Card className="signingRoom">
     <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone={hasSignatureDraft ? 'good' : 'warn'}>{hasSignatureDraft ? 'Firma lista' : 'Firma electrónica'}</Badge></div>
-    <div className={`signStepNotice ${stepDone ? 'done' : hasSignatureDraft ? 'attention' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : hasSignatureDraft ? 'Firma dibujada: falta seleccionar el recuadro' : 'Paso obligatorio: presioná el recuadro naranja de firma'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : hasSignatureDraft ? 'El dibujo de la firma ya quedó cargado. Ahora clickeá el recuadro asignado dentro del documento para vincularla a ese campo.' : 'Para dejar constancia de intención, tocá/clickeá el recuadro asignado dentro del documento antes de avanzar.'}</span></div>
+    <div className={`signStepNotice ${stepDone ? 'done' : hasSignatureDraft ? 'attention' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : hasSignatureDraft ? 'Firma lista: falta seleccionar el recuadro' : 'Paso obligatorio: presioná el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : hasSignatureDraft ? 'La firma ya quedó cargada. Ahora seleccioná el recuadro asignado dentro del documento para vincularla.' : 'Para dejar constancia de intención, seleccioná tu recuadro dentro del documento antes de avanzar.'}</span></div>
     <MobileQrPrompt link={mobileLink} received={mobileSignatureReceived} signatureImage={signatureMode === 'drawn' ? signatureImage : ''} />
     {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
     <div className="grid two signControls">
@@ -1422,7 +1564,7 @@ function SigningRoom({ request, user, docu }) {
         <h3>Tu firma</h3>
         {hasSignatureDraft && !signatureEditorOpen ? <div className="signatureReadyCard">
           <div className="signatureReadyPreview">{hasDrawnSignature ? <img src={signatureImage} alt="Firma cargada"/> : <span>{typedName.trim()}</span>}</div>
-          <div><strong>Firma lista</strong><p>{mobileSignatureReceived ? 'Recibimos el dibujo desde el celular y ya quedó cargado en esta computadora.' : 'La firma ya quedó cargada para este documento.'}</p><small>Ahora presioná el recuadro naranja del documento, completá DNI/consentimiento y confirmá.</small></div>
+          <div><strong>Firma lista</strong><p>{mobileSignatureReceived ? 'Recibimos el dibujo desde el celular y ya quedó cargado en esta computadora.' : 'La firma ya quedó cargada para este documento.'}</p><small>Ahora seleccioná el recuadro marcado, completá DNI y consentimiento, y confirmá.</small></div>
           <div className="actions"><Button variant="ghost" type="button" onClick={() => setSignatureEditorOpen(true)}>Modificar firma</Button></div>
         </div> : <>
           <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>

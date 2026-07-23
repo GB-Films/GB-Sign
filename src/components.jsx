@@ -1,7 +1,7 @@
 import React from 'react';
 
-export function Button({ children, variant = 'primary', ...props }) {
-  return <button className={`btn ${variant}`} {...props}>{children}</button>;
+export function Button({ children, variant = 'primary', className = '', ...props }) {
+  return <button className={`btn ${variant} ${className}`.trim()} {...props}>{children}</button>;
 }
 
 export function Card({ children, className = '' }) {
