@@ -1372,7 +1372,9 @@ function MobileFullSigningRoom({ request, user }) {
   function selectSignatureField(fieldId) {
     setActiveFieldId(fieldId);
     setFieldClicked(true);
-    setTimeout(() => document.getElementById('mobile-signature-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      setTimeout(() => document.getElementById('mobile-signature-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+    }
   }
 
   async function submit() {
@@ -1418,21 +1420,30 @@ function MobileFullSigningRoom({ request, user }) {
 
   return <Card className="mobileSignCard mobileFullCard">
     <div className="mobileSignTop"><ShieldCheck size={34}/><div><h1>Revisar y firmar</h1><p>{docu?.title || request.title || request.fileName || 'Documento'}</p></div></div>
-    <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso 1: tocá el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ahora completá tu firma, DNI y consentimiento.' : 'Revisá el documento y tocá el campo de firma asignado a tu correo.'}</span></div>
-    {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
-    <div id="mobile-signature-controls" className="mobileControlStack">
-      <Card>
-        <h3>Paso 2: firma</h3>
-        <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar con el dedo</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
-        {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
-      </Card>
-      <Card>
-        <h3>Paso 3: identidad</h3>
-        <Field label="DNI"><input inputMode="numeric" value={dni} onChange={(e)=>setDni(e.target.value)} placeholder="Ej: 34553626"/></Field>
-        <label className="check compactCheck"><input type="checkbox" checked={dniConfirmed} onChange={(e)=>setDniConfirmed(e.target.checked)}/><span>Confirmo que este DNI es correcto y me identifica como firmante.</span></label>
-      </Card>
-      <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
-      <Button onClick={submit} disabled={busy || !fieldClicked || !activeField}>{busy ? 'Firmando...' : fieldClicked ? 'Confirmar firma electrónica' : 'Primero tocá el recuadro'}</Button>
+    <div className="signingLayout">
+      <section className="signingDocument" aria-label="Documento a firmar">
+        <div className="signingSectionHeading"><span className="eyebrow">Paso 1</span><h3>Revisá el documento</h3><p>Leé el contenido y seleccioná tu recuadro de firma.</p></div>
+        <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso 1: tocá el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ahora completá tu firma, DNI y consentimiento.' : 'Revisá el documento y tocá el campo de firma asignado a tu correo.'}</span></div>
+        {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
+      </section>
+      <aside id="mobile-signature-controls" className="mobileControlStack signingDetails" aria-label="Datos del firmante y confirmación">
+        <Card>
+          <h3>Paso 2 · Tus datos</h3>
+          <div className="signerIdentity"><strong>{user.displayName || 'Firmante'}</strong><span>{normalizeEmail(user.email)}</span></div>
+          <Field label="DNI"><input inputMode="numeric" value={dni} onChange={(e)=>setDni(e.target.value)} placeholder="Ej: 34553626"/></Field>
+          <label className="check compactCheck"><input type="checkbox" checked={dniConfirmed} onChange={(e)=>setDniConfirmed(e.target.checked)}/><span>Confirmo que este DNI es correcto y me identifica como firmante.</span></label>
+        </Card>
+        <Card>
+          <h3>Paso 3 · Tu firma</h3>
+          <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar con el dedo</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
+          {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
+        </Card>
+        <Card className="signingConfirmation">
+          <h3>Paso 4 · Confirmá</h3>
+          <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
+          <Button onClick={submit} disabled={busy || !fieldClicked || !activeField}>{busy ? 'Firmando...' : fieldClicked ? 'Confirmar firma electrónica' : 'Primero tocá el recuadro'}</Button>
+        </Card>
+      </aside>
     </div>
   </Card>;
 }
@@ -1547,34 +1558,45 @@ function SigningRoom({ request, user, docu }) {
 
   return <Card className="signingRoom">
     <div className="cardHead"><h3>Revisar y firmar</h3><Badge tone={hasSignatureDraft ? 'good' : 'warn'}>{hasSignatureDraft ? 'Firma lista' : 'Firma electrónica'}</Badge></div>
-    <div className={`signStepNotice ${stepDone ? 'done' : hasSignatureDraft ? 'attention' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : hasSignatureDraft ? 'Firma lista: falta seleccionar el recuadro' : 'Paso obligatorio: presioná el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : hasSignatureDraft ? 'La firma ya quedó cargada. Ahora seleccioná el recuadro asignado dentro del documento para vincularla.' : 'Para dejar constancia de intención, seleccioná tu recuadro dentro del documento antes de avanzar.'}</span></div>
-    <MobileQrPrompt link={mobileLink} received={mobileSignatureReceived} signatureImage={signatureMode === 'drawn' ? signatureImage : ''} />
-    {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
-    <div className="grid two signControls">
-      <Card>
-        <h3>Campo asignado</h3>
-        {fields.length ? <div className="chips">{fields.map((f, idx) => <span className={`chip chipButton ${fieldClicked && f.id === activeFieldId ? 'active' : ''}`} key={f.id}>Campo {idx + 1} · {fieldClicked && f.id === activeFieldId ? 'seleccionado' : 'tocá el recuadro en el documento'}</span>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
-      </Card>
-      <Card>
-        <h3>Identidad del firmante</h3>
-        <Field label="DNI"><input inputMode="numeric" value={dni} onChange={(e)=>setDni(e.target.value)} placeholder="Ej: 34553626"/></Field>
-        <label className="check compactCheck"><input type="checkbox" checked={dniConfirmed} onChange={(e)=>setDniConfirmed(e.target.checked)}/><span>Confirmo que este DNI es correcto y me identifica como firmante.</span></label>
-      </Card>
-      <Card className="wideCard">
-        <h3>Tu firma</h3>
-        {hasSignatureDraft && !signatureEditorOpen ? <div className="signatureReadyCard">
-          <div className="signatureReadyPreview">{hasDrawnSignature ? <img src={signatureImage} alt="Firma cargada"/> : <span>{typedName.trim()}</span>}</div>
-          <div><strong>Firma lista</strong><p>{mobileSignatureReceived ? 'Recibimos el dibujo desde el celular y ya quedó cargado en esta computadora.' : 'La firma ya quedó cargada para este documento.'}</p><small>Ahora seleccioná el recuadro marcado, completá DNI y consentimiento, y confirmá.</small></div>
-          <div className="actions"><Button variant="ghost" type="button" onClick={() => setSignatureEditorOpen(true)}>Modificar firma</Button></div>
-        </div> : <>
-          <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
-          {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
-          {hasSignatureDraft && <div className="actions"><Button variant="ghost" type="button" onClick={() => setSignatureEditorOpen(false)}>Usar esta firma</Button></div>}
-        </>}
-      </Card>
+    <div className="signingLayout">
+      <section className="signingDocument" aria-label="Documento a firmar">
+        <div className="signingSectionHeading"><span className="eyebrow">Paso 1</span><h3>Revisá el documento</h3><p>Leé el contenido y seleccioná tu recuadro de firma.</p></div>
+        <div className={`signStepNotice ${stepDone ? 'done' : hasSignatureDraft ? 'attention' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : hasSignatureDraft ? 'Firma lista: falta seleccionar el recuadro' : 'Paso obligatorio: presioná el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : hasSignatureDraft ? 'La firma ya quedó cargada. Ahora seleccioná el recuadro asignado dentro del documento para vincularla.' : 'Para dejar constancia de intención, seleccioná tu recuadro dentro del documento antes de avanzar.'}</span></div>
+        {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
+      </section>
+      <aside className="signingDetails" aria-label="Datos del firmante y confirmación">
+        <div className="signControls">
+          <Card>
+            <h3>Tu campo de firma</h3>
+            {fields.length ? <div className="chips">{fields.map((f, idx) => <span className={`chip chipButton ${fieldClicked && f.id === activeFieldId ? 'active' : ''}`} key={f.id}>Campo {idx + 1} · {fieldClicked && f.id === activeFieldId ? 'seleccionado' : 'tocá el recuadro en el documento'}</span>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
+          </Card>
+          <Card>
+            <h3>Paso 2 · Tus datos</h3>
+            <div className="signerIdentity"><strong>{user.displayName || 'Firmante'}</strong><span>{normalizeEmail(user.email)}</span></div>
+            <Field label="DNI"><input inputMode="numeric" value={dni} onChange={(e)=>setDni(e.target.value)} placeholder="Ej: 34553626"/></Field>
+            <label className="check compactCheck"><input type="checkbox" checked={dniConfirmed} onChange={(e)=>setDniConfirmed(e.target.checked)}/><span>Confirmo que este DNI es correcto y me identifica como firmante.</span></label>
+          </Card>
+          <Card className="wideCard">
+            <h3>Paso 3 · Tu firma</h3>
+            {hasSignatureDraft && !signatureEditorOpen ? <div className="signatureReadyCard">
+              <div className="signatureReadyPreview">{hasDrawnSignature ? <img src={signatureImage} alt="Firma cargada"/> : <span>{typedName.trim()}</span>}</div>
+              <div><strong>Firma lista</strong><p>{mobileSignatureReceived ? 'Recibimos el dibujo desde el celular y ya quedó cargado en esta computadora.' : 'La firma ya quedó cargada para este documento.'}</p><small>Ahora seleccioná el recuadro marcado, completá DNI y consentimiento, y confirmá.</small></div>
+              <div className="actions"><Button variant="ghost" type="button" onClick={() => setSignatureEditorOpen(true)}>Modificar firma</Button></div>
+            </div> : <>
+              <div className="modeTabs"><button type="button" className={signatureMode === 'drawn' ? 'active' : ''} onClick={() => setSignatureMode('drawn')}>Dibujar</button><button type="button" className={signatureMode === 'typed' ? 'active' : ''} onClick={() => setSignatureMode('typed')}>Nombre cursiva</button></div>
+              {signatureMode === 'drawn' ? <SignaturePad onChange={setSignatureImage}/> : <Field label="Nombre a firmar"><input value={typedName} onChange={(e)=>setTypedName(e.target.value)} placeholder="Tu nombre completo"/></Field>}
+              {hasSignatureDraft && <div className="actions"><Button variant="ghost" type="button" onClick={() => setSignatureEditorOpen(false)}>Usar esta firma</Button></div>}
+            </>}
+            <MobileQrPrompt link={mobileLink} received={mobileSignatureReceived} signatureImage={signatureMode === 'drawn' ? signatureImage : ''} />
+          </Card>
+        </div>
+        <Card className="signingConfirmation">
+          <h3>Paso 4 · Confirmá</h3>
+          <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
+          <div className="actions"><Button onClick={sign} disabled={busy || !fieldClicked || !activeField}>{busy ? 'Firmando...' : fieldClicked ? 'Confirmar firma electrónica' : 'Primero presioná el recuadro'}</Button></div>
+        </Card>
+      </aside>
     </div>
-    <label className="check"><input type="checkbox" checked={consent} onChange={(e)=>setConsent(e.target.checked)}/><span>{ACCEPTANCE_TEXT}</span></label>
-    <div className="actions"><Button onClick={sign} disabled={busy || !fieldClicked || !activeField}>{busy ? 'Firmando...' : fieldClicked ? 'Confirmar firma electrónica' : 'Primero presioná el recuadro'}</Button></div>
   </Card>;
 }
 

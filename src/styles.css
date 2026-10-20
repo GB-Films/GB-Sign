@@ -1561,6 +1561,101 @@ small {
   box-shadow: var(--shadow-md);
 }
 
+.signingRoom,
+.mobileFullCard {
+  container-type: inline-size;
+}
+
+.signingLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.signingDocument,
+.signingDetails {
+  min-width: 0;
+}
+
+.signingSectionHeading h3 {
+  margin: 4px 0 6px;
+}
+
+.signingSectionHeading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.signingDetails,
+.signingDetails .signControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  margin: 0;
+}
+
+.signingDetails .card {
+  min-width: 0;
+  padding: 18px;
+}
+
+.signingDetails .wideCard {
+  grid-column: auto;
+}
+
+.signingDetails .signatureReadyCard {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.signerIdentity {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+
+.signerIdentity span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.signingConfirmation .actions .btn,
+.signingConfirmation > .btn {
+  width: 100%;
+}
+
+.signingDetails .mobileQrPrompt {
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 0;
+}
+
+.signingDetails .mobileQrPrompt > img {
+  width: 88px;
+  height: 88px;
+}
+
+.mobileFullCard {
+  max-width: 1260px;
+}
+
+@container (min-width: 860px) {
+  .signingLayout {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+
+  .signingDocument {
+    position: sticky;
+    top: 16px;
+  }
+
+  .signingLayout .signingDocument .pdfPageList {
+    height: clamp(360px, calc(100dvh - 300px), 780px);
+  }
+}
+
 .signStepNotice {
   margin: 14px 0;
   padding: 13px 15px;
@@ -2222,7 +2317,7 @@ small {
 }
 
 .mobileFullCard {
-  width: min(100%, 980px);
+  width: min(100%, 1260px);
   margin: 0 auto;
 }
 
