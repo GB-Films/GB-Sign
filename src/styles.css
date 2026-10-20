@@ -1566,6 +1566,70 @@ small {
   container-type: inline-size;
 }
 
+.pendingBlock.focusMode {
+  position: relative;
+}
+
+.signingStatusDisclosure {
+  position: absolute;
+  top: 22px;
+  right: 175px;
+  z-index: 5;
+  font-size: 12px;
+}
+
+.signingStatusDisclosure summary,
+.signingQrDisclosure summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+
+.signingStatusPopover,
+.signingQrDisclosure > .mobileQrPrompt {
+  position: absolute;
+  right: 0;
+  width: 330px;
+  max-width: calc(100vw - 60px);
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  z-index: 6;
+}
+
+.signingStatusPopover {
+  top: 28px;
+}
+
+.signingQrDisclosure {
+  position: relative;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.signingQrDisclosure > .mobileQrPrompt {
+  bottom: 24px;
+}
+
+.signingFieldStatus {
+  margin-top: 8px;
+}
+
+.signatureSectionHeader {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.signatureSectionHeader h3 {
+  margin: 0;
+}
+
 .signingLayout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1643,16 +1707,204 @@ small {
 
 @container (min-width: 860px) {
   .signingLayout {
-    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 18px;
   }
 
   .signingDocument {
-    position: sticky;
-    top: 16px;
+    position: static;
   }
 
   .signingLayout .signingDocument .pdfPageList {
-    height: clamp(360px, calc(100dvh - 300px), 780px);
+    height: auto;
+    max-height: var(--signing-document-height, calc(100dvh - 440px));
+    overflow-y: auto;
+  }
+
+  .signingLayout .signingDocument .docPreview:has(.imagePage),
+  .signingLayout .signingDocument .docPreview:has(.previewFallback) {
+    max-height: var(--signing-document-height, calc(100dvh - 340px));
+    overflow-y: auto;
+  }
+
+  .signingSectionHeading {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .signingSectionHeading h3 {
+    margin: 0;
+    font-size: 15px;
+  }
+
+  .signingSectionHeading p,
+  .signingDocument .signStepNotice span {
+    display: none;
+  }
+
+  .signingDocument .signStepNotice {
+    margin: 8px 0;
+    padding: 10px;
+    font-size: 13px;
+  }
+
+  .signingDetails,
+  .signingDetails .signControls {
+    gap: 6px;
+  }
+
+  .signingDetails .card {
+    padding: 10px 12px;
+    border-radius: 14px;
+    box-shadow: none;
+  }
+
+  .signingDetails .card h3 {
+    margin: 0 0 6px;
+    font-size: 14px;
+  }
+
+  .signingDetails .signatureSectionHeader h3 {
+    margin: 0;
+  }
+
+  .signingDetails .signatureSectionHeader .btn {
+    min-height: 24px;
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+
+  .signingDetails .signerIdentity {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+
+  .signingDetails .field {
+    gap: 4px;
+  }
+
+  .signingDetails .field:has(input[inputmode="numeric"]) {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+  }
+
+  .signingDetails input:not([type="checkbox"]) {
+    padding: 8px 10px;
+  }
+
+  .signingDetails .check {
+    padding: 0;
+    margin: 8px 0;
+    border: 0;
+    background: transparent;
+    font-size: 12px;
+    line-height: 1.4;
+    gap: 8px;
+  }
+
+  .signingDetails .compactCheck {
+    margin-bottom: 0;
+  }
+
+  .signingDetails .signaturePad {
+    height: clamp(80px, calc(100dvh - 720px), 130px);
+  }
+
+  .signingDetails .modeTabs {
+    margin-bottom: 8px;
+  }
+
+  .signingDetails .btn {
+    min-height: 34px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .signingDetails .padWrap {
+    gap: 6px;
+  }
+
+  .signingDetails .signatureReadyCard {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .signingDetails .signatureReadyCard p,
+  .signingDetails .signatureReadyCard small {
+    display: none;
+  }
+
+  .signingDetails .signatureReadyPreview {
+    min-height: 48px;
+    padding: 4px;
+  }
+
+  .signingDetails .signatureReadyPreview img {
+    max-height: 48px;
+  }
+}
+
+@media (max-width: 900px) {
+  .signingStatusDisclosure {
+    position: relative;
+    top: auto;
+    right: auto;
+    padding: 10px 14px;
+  }
+
+  .signingStatusPopover {
+    left: 0;
+    right: auto;
+  }
+
+  .signingQrDisclosure {
+    display: none;
+  }
+}
+
+@media (min-width: 901px) {
+  .signFocusShell {
+    padding: 16px;
+  }
+
+  .signFocusHeader {
+    margin-bottom: 12px;
+  }
+
+  .signFocusHeader h1 {
+    font-size: 28px;
+  }
+
+  .signFocusContent .signingRoom {
+    padding: 14px;
+  }
+
+  .signFocusContent .signingRoom > .cardHead h3 {
+    margin-bottom: 8px;
+  }
+
+  .signingStatusDisclosure {
+    top: 16px;
+  }
+}
+
+@media (min-width: 901px) and (max-height: 760px) {
+  .signFocusContent .signingRoom > .cardHead {
+    display: none;
+  }
+
+  .signFocusContent .signingRoom {
+    padding: 12px;
+  }
+
+  .signingStatusDisclosure {
+    top: -28px;
+    right: 0;
   }
 }
 
@@ -1966,7 +2218,7 @@ small {
   height: clamp(520px, 72vh, 820px);
   padding: 18px;
   overflow-x: hidden;
-  overflow-y: scroll;
+  overflow-y: auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content;
