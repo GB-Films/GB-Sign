@@ -1,9 +1,12 @@
+import { signingConsent } from './signingPolicy.js';
+import { goatSessionHandler } from './goatPortalSession.js';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
-import { createHash } from 'node:crypto';
+import {defineString} from 'firebase-functions/params';
+import { createHash, randomUUID } from 'node:crypto';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 initializeApp();
@@ -18,7 +21,9 @@ const MIN_SIGNATURE_BOX_H_PT = 62;
 const MAX_SIGNATURE_BOX_W_PT = 280;
 const MAX_SIGNATURE_BOX_H_PT = 92;
 
-const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
+const goatSessionServiceAccount=defineString('SIGN_GOAT_BRIDGE_SERVICE_ACCOUNT',{default:'sign-goat-bridge@gb-sign-e1776.iam.gserviceaccount.com'});
+export const exchangeGoatSession = onCall({ timeoutSeconds: 30, maxInstances: 3, serviceAccount:goatSessionServiceAccount }, goatSessionHandler);
+
 
 export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, async (request) => {
   const auth = requireAuth(request);
@@ -31,7 +36,7 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
   const dni = normalizeDni(data.dni);
   const typedName = String(data.typedName || '').trim().slice(0, 120);
   const signatureImage = String(data.signatureImage || '');
-  const acceptedText = String(data.acceptedText || ACCEPTANCE_TEXT).slice(0, 2000);
+  const acceptedText = signingConsent(data.acceptedText, request.auth.token.identityProvider || request.auth.token.firebase?.sign_in_provider);
   const clientEvidence = sanitizeClientEvidence(data.clientEvidence || {});
 
   if (!dni || dni.length < 6) throw new HttpsError('invalid-argument', 'El DNI debe tener entre 6 y 12 números.');
@@ -43,6 +48,15 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
   const docRef = projectRef.collection('documents').doc(docId);
   const requestRef = db.collection('signatureRequests').doc(requestId);
   const signatureRef = docRef.collection('signatures').doc(auth.uid);
+  const originalSnap=await docRef.get();
+  if(!originalSnap.exists) throw new HttpsError('not-found','Documento inexistente.');
+  const original=originalSnap.data();
+  if(!(original.signerEmails||[]).map(normalizeEmail).includes(auth.email)) throw new HttpsError('permission-denied','No estás asignado al documento.');
+  if(typeof original.storagePath!=='string'||!original.storagePath.startsWith(`projects/${projectId}/documents/${docId}/`))throw new HttpsError('failed-precondition','El original no pertenece a este documento.');
+  const [originalBytes]=await bucket.file(original.storagePath).download();
+  if(!original.sha256 || sha256(originalBytes)!==original.sha256) throw new HttpsError('failed-precondition','El original cambió. No se registra la firma.');
+  try { await PDFDocument.load(originalBytes, {ignoreEncryption:false}); }
+  catch { throw new HttpsError('failed-precondition','Para firmar necesitamos el original en PDF, sin contraseña.'); }
   const signedAt = new Date();
 
   await db.runTransaction(async (tx) => {
@@ -60,6 +74,9 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
 
     const docu = { id: docSnap.id, ...docSnap.data() };
     const req = reqSnap.data() || {};
+    if(docu.sha256!==original.sha256 || docu.storagePath!==original.storagePath) throw new HttpsError('failed-precondition','La versión cambió mientras firmabas.');
+    if(['revoked','replaced','cancelled'].includes(docu.status)) throw new HttpsError('failed-precondition','Documento sin vigencia.');
+    if((docu.portalManaged && !data.documentSha256) || (data.documentSha256 && data.documentSha256!==docu.sha256)) throw new HttpsError('failed-precondition','Firmaste otra versión.');
     const signerEmails = (docu.signerEmails || []).map(normalizeEmail);
     if (!signerEmails.includes(auth.email)) throw new HttpsError('permission-denied', 'Tu email autenticado no está asignado como firmante.');
     if (normalizeEmail(req.signerEmail || '') !== auth.email || req.projectId !== projectId || req.docId !== docId) {
@@ -109,8 +126,9 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
       consentElectronicSignature: true,
       intentAction: 'El firmante abrió el documento, presionó su campo de firma asignado, declaró su DNI, aceptó el consentimiento y confirmó la firma electrónica.',
       acceptedText,
-      authProvider: 'google.com via Firebase Authentication',
+      authProvider: request.auth.token.identityProvider || request.auth.token.firebase?.sign_in_provider || 'unknown',
       authUid: auth.uid,
+      goatActorUid: request.auth.token.goatPortal === true ? request.auth.token.goatUid : null,
       authEmailVerified: Boolean(request.auth?.token?.email_verified),
       serverVerified: true,
       serverFunction: 'signDocument',
@@ -123,6 +141,7 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
     };
 
     tx.create(signatureRef, signaturePayload);
+    tx.update(docRef,{signatureLocked:true});
     tx.set(requestRef, {
       status: 'signed',
       signedAt: FieldValue.serverTimestamp(),
@@ -193,6 +212,7 @@ async function generateArtifacts(projectId, docId, context) {
   if (!signatures.length) throw new HttpsError('failed-precondition', 'El documento todavía no tiene firmas.');
   if (!docu.storagePath) throw new HttpsError('failed-precondition', 'El documento no tiene archivo asociado en Storage.');
 
+  if(!docu.storagePath.startsWith(`projects/${projectId}/documents/${docId}/`))throw new HttpsError('failed-precondition','El original no pertenece a este documento.');
   const [originalBuffer] = await bucket.file(docu.storagePath).download();
   const originalSha256 = sha256(originalBuffer);
   if (docu.sha256 && originalSha256 !== docu.sha256) {
@@ -204,7 +224,7 @@ async function generateArtifacts(projectId, docId, context) {
   const certificateBytes = await buildEvidenceCertificatePdf({ project, docu, signatures, originalSha256, signedPdfSha256, context });
   const certificateSha256 = sha256(Buffer.from(certificateBytes));
 
-  const base = `projects/${projectId}/artifacts/${docId}`;
+  const base = `projects/${projectId}/artifacts/${docId}/${randomUUID()}`;
   const signedPdfPath = `${base}/${safeFileName(docu.title || docu.fileName || 'documento')}-firmado-gb-sign.pdf`;
   const certificatePdfPath = `${base}/${safeFileName(docu.title || docu.fileName || 'documento')}-certificado-evidencia-gb-sign.pdf`;
 
@@ -242,7 +262,14 @@ async function generateArtifacts(projectId, docId, context) {
   });
   const allSigned = signerEmails.length > 0 && signerEmails.every((e) => signedEmails.includes(e));
 
-  await docRef.set({
+  const signatureVersion = list => JSON.stringify(list.map(sig=>[sig.uid||sig.authUid,normalizeEmail(sig.email),sig.documentSha256,sig.signedAtIso]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
+  let stale=false;
+  await db.runTransaction(async tx=>{
+    const current=await tx.get(docRef);
+    const latest=await tx.get(docRef.collection('signatures'));
+    if(current.data()?.sha256!==originalSha256)throw new HttpsError('failed-precondition','La versión del original cambió.');
+    if(signatureVersion(latest.docs.map(d=>d.data()))!==signatureVersion(signatures)){stale=true;return;}
+    tx.set(docRef,{
     status: allSigned ? 'completed' : 'partially_signed',
     signatureStatus: publicSignatureStatus,
     serverArtifacts: {
@@ -260,6 +287,8 @@ async function generateArtifacts(projectId, docId, context) {
     },
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
+  });
+  if(stale){if((context.attempt||0)>=3)throw new HttpsError('aborted','Hay nuevas firmas. Volvé a generar los documentos.');return generateArtifacts(projectId,docId,{...context,attempt:(context.attempt||0)+1});}
 
   await db.collection('artifactEvents').add({
     projectId,
@@ -297,7 +326,9 @@ export const deleteProject = onCall({ timeoutSeconds: 300, memory: '1GiB' }, asy
   const projectSnap = await projectRef.get();
   if (!projectSnap.exists) throw new HttpsError('not-found', 'El proyecto no existe.');
 
+  if(projectSnap.data().portalManaged) throw new HttpsError('failed-precondition','Los proyectos integrados se administran desde GOAT.');
   const docsSnap = await projectRef.collection('documents').get();
+  if(docsSnap.docs.some(d=>d.data().portalManaged||d.data().signatureLocked)) throw new HttpsError('failed-precondition','El proyecto contiene documentos que deben conservarse.');
   let deletedDocuments = 0;
   let deletedSignatures = 0;
   let deletedRequests = 0;
@@ -330,6 +361,7 @@ async function deleteDocumentCascade(projectId, docId, options = {}) {
   }
   const docSnap = await docRef.get();
   if (!docSnap.exists) throw new HttpsError('not-found', 'El documento no existe.');
+  if(docSnap.data().portalManaged || docSnap.data().signatureLocked) throw new HttpsError('failed-precondition','La declaración se conserva desde GOAT y no puede eliminarse.');
 
   const signaturesSnap = await docRef.collection('signatures').get();
   await deleteRefsInChunks(signaturesSnap.docs.map((d) => d.ref));
@@ -521,7 +553,7 @@ async function appendEvidencePages(pdfDoc, { project, docu, signatures, original
   if (includeLegalNote) {
     y -= 8;
     text('Nota legal operativa', { size: 12, bold: true, maxChars: 88 });
-    text('GB Sign registra firmas electrónicas con evidencia de autenticación Google/Firebase, intención, consentimiento, DNI declarado, hash de integridad del documento, fecha/hora de servidor y generación de artefactos por backend. No reemplaza una firma digital certificada con autoridad certificante.', { size: 9, maxChars: 94 });
+    text('GB Sign registra firmas electrónicas con evidencia de autenticación de cuenta verificada/Firebase, intención, consentimiento, DNI declarado, hash de integridad del documento, fecha/hora de servidor y generación de artefactos por backend. No reemplaza una firma digital certificada con autoridad certificante.', { size: 9, maxChars: 94 });
   }
 
   y -= 10;
@@ -534,7 +566,7 @@ async function appendEvidencePages(pdfDoc, { project, docu, signatures, original
     text(`Firma ${index + 1}: ${sig.displayName || sig.typedName || sig.email || 'Firmante'}`, { size: 12, bold: true, maxChars: 88 });
     row('Email autenticado', sig.email || '-');
     row('UID Firebase', sig.uid || sig.authUid || '-');
-    row('Email verificado', sig.authEmailVerified ? 'Sí, reportado por Firebase Auth/Google' : 'No informado');
+    row('Email verificado', sig.authEmailVerified ? 'Sí, reportado por Firebase Authentication' : 'No informado');
     row('DNI declarado', sig.dni ? `${sig.dni} (${sig.dniConfirmed ? 'confirmado por el firmante' : 'sin confirmación'})` : '-');
     row('Fecha y hora servidor', signedAtText(sig));
     row('Tipo de firma', sig.signatureType === 'drawn' ? 'Firma dibujada con mouse/touch' : 'Firma cursiva generada con nombre');
@@ -565,7 +597,7 @@ async function appendEvidencePages(pdfDoc, { project, docu, signatures, original
 }
 
 function requireAuth(request) {
-  if (!request.auth?.uid || !request.auth?.token?.email) throw new HttpsError('unauthenticated', 'Tenés que iniciar sesión con Google para firmar.');
+  if (!request.auth?.uid || !request.auth?.token?.email || request.auth.token.email_verified!==true) throw new HttpsError('unauthenticated', 'Ingresá con una cuenta verificada para firmar.');
   return { uid: request.auth.uid, email: normalizeEmail(request.auth.token.email), name: request.auth.token.name || '' };
 }
 function cleanId(value, name) {
