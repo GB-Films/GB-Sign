@@ -1,4 +1,4 @@
-import { signingConsent } from './signingPolicy.js';
+import { signingConsent, signingIdentityProvider } from './signingPolicy.js';
 import { goatSessionHandler } from './goatPortalSession.js';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
@@ -36,7 +36,7 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
   const dni = normalizeDni(data.dni);
   const typedName = String(data.typedName || '').trim().slice(0, 120);
   const signatureImage = String(data.signatureImage || '');
-  const acceptedText = signingConsent(data.acceptedText, request.auth.token.identityProvider || request.auth.token.firebase?.sign_in_provider);
+  const acceptedText = signingConsent(data.acceptedText, auth.provider);
   const clientEvidence = sanitizeClientEvidence(data.clientEvidence || {});
 
   if (!dni || dni.length < 6) throw new HttpsError('invalid-argument', 'El DNI debe tener entre 6 y 12 números.');
@@ -126,7 +126,7 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
       consentElectronicSignature: true,
       intentAction: 'El firmante abrió el documento, presionó su campo de firma asignado, declaró su DNI, aceptó el consentimiento y confirmó la firma electrónica.',
       acceptedText,
-      authProvider: request.auth.token.identityProvider || request.auth.token.firebase?.sign_in_provider || 'unknown',
+      authProvider: auth.provider,
       authUid: auth.uid,
       goatActorUid: request.auth.token.goatPortal === true ? request.auth.token.goatUid : null,
       authEmailVerified: Boolean(request.auth?.token?.email_verified),
@@ -598,7 +598,8 @@ async function appendEvidencePages(pdfDoc, { project, docu, signatures, original
 
 function requireAuth(request) {
   if (!request.auth?.uid || !request.auth?.token?.email || request.auth.token.email_verified!==true) throw new HttpsError('unauthenticated', 'Ingresá con una cuenta verificada para firmar.');
-  return { uid: request.auth.uid, email: normalizeEmail(request.auth.token.email), name: request.auth.token.name || '' };
+  const provider = signingIdentityProvider(request.auth.token);
+  return { uid: request.auth.uid, email: normalizeEmail(request.auth.token.email), name: request.auth.token.name || '', provider };
 }
 function cleanId(value, name) {
   const v = String(value || '').trim();

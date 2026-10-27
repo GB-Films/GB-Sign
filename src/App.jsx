@@ -14,7 +14,7 @@ import {
   ShieldCheck, Smartphone, Trash2, Upload, UserCircle, Users, X
 } from 'lucide-react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { auth, db, provider, microsoftProvider, storage, functions } from './firebase';
+import { auth, db, provider, storage, functions } from './firebase';
 import { Badge, Button, Card, Empty, Field } from './components.jsx';
 import {
   downloadBytes, downloadText, emailKey, fmtDate, normalizeEmail, parseEmails,
@@ -343,7 +343,7 @@ function SignerWelcome({ user }) {
 
 function Login() {
   const [loginError,setLoginError]=useState(''),[connecting,setConnecting]=useState(false);
-  async function login(identityProvider){setConnecting(true);setLoginError('');try{await signInWithPopup(auth,identityProvider);}catch(e){setLoginError(e.code==='auth/account-exists-with-different-credential'?'Ingresá con el método que ya usabas para esta cuenta.':e.code==='auth/operation-not-allowed'?'Este método todavía no está habilitado. Usá el método disponible.':'No pudimos completar el ingreso. Revisá la ventana de acceso y volvé a intentar.');}finally{setConnecting(false);}}
+  async function login(){setConnecting(true);setLoginError('');try{await signInWithPopup(auth,provider);}catch(e){setLoginError(e.code==='auth/operation-not-allowed'?'El ingreso con Google no está habilitado. Contactá a administración.':'No pudimos completar el ingreso con Google. Revisá la ventana de acceso y volvé a intentar.');}finally{setConnecting(false);}}
   const { sign: directRequestId, mobileSign: mobileRequestId, mobileCapture: mobileCaptureRequestId } = getRouteParams();
   return <main className="login">
     <section className="loginFrame">
@@ -362,8 +362,7 @@ function Login() {
           <span className="accessIcon"><LockKeyhole size={22}/></span>
           <div><span className="eyebrow">Acceso seguro</span><h2>Entrá a tu cuenta</h2><p>Usá el mismo correo con el que recibiste la invitación o administrás proyectos.</p></div>
           {(directRequestId || mobileRequestId || mobileCaptureRequestId) && <div className="directLoginNotice"><strong>{mobileCaptureRequestId ? 'Firma iniciada desde el celular' : mobileRequestId ? 'Solicitud móvil detectada' : 'Tenés un documento esperando'}</strong><span>Al ingresar vas a continuar directamente con esta solicitud.</span></div>}
-          <Button className="googleButton" disabled={connecting} onClick={() => login(provider)}><span className="googleG">G</span> Continuar con Google <ArrowRight size={17}/></Button>
-          <Button className="googleButton" disabled={connecting} onClick={() => login(microsoftProvider)}>Continuar con Microsoft <ArrowRight size={17}/></Button>
+          <Button className="googleButton" disabled={connecting} onClick={login}><span className="googleG">G</span> Continuar con Google <ArrowRight size={17}/></Button>
           {loginError&&<p role="alert" className="muted">{loginError}</p>}<p className="privacyNote"><ShieldCheck size={15}/> Sólo mostramos información vinculada a tu cuenta.</p>
         </Card>
       </div>

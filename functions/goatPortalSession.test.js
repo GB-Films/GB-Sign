@@ -8,13 +8,15 @@ const token = {
   uid: "goat-user",
   email: "Person@Company.test",
   email_verified: true,
-  firebase: { sign_in_provider: "microsoft.com" },
+  firebase: { sign_in_provider: "google.com" },
 };
-test("session bridge validates email assurance and supported identity provider", () => {
+test("session bridge accepts only verified Google accounts, without a Gmail suffix requirement", () => {
   assert.equal(validPortalIdentity(token).email, "person@company.test");
   for (const t of [
     { ...token, email_verified: false },
     { ...token, firebase: { sign_in_provider: "password" } },
+    { ...token, firebase: { sign_in_provider: "microsoft.com" } },
+    { ...token, firebase: { sign_in_provider: "custom" }, identityProvider: "google.com" },
     { ...token, uid: "" },
   ])
     assert.throws(() => validPortalIdentity(t));
@@ -29,7 +31,7 @@ test("GOAT token must verify before minting and disabled portal creates no sessi
     mint: async (uid, claims) => {
       minted++;
       assert.equal(uid, "native-sign-user");
-      assert.equal(claims.identityProvider, "microsoft.com");
+      assert.equal(claims.identityProvider, "google.com");
       assert.equal(claims.goatUid, "goat-user");
       return "short-lived";
     },

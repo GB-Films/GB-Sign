@@ -8,11 +8,11 @@ export function validPortalIdentity(token) {
     !token?.uid ||
     !token.email ||
     token.email_verified !== true ||
-    !["google.com", "microsoft.com"].includes(token.firebase?.sign_in_provider)
+    token.firebase?.sign_in_provider !== "google.com"
   )
     throw new HttpsError(
       "permission-denied",
-      "Verificá tu correo con Google o Microsoft.",
+      "Ingresá con tu cuenta Google y verificá tu correo.",
     );
   return {
     uid: token.uid,
