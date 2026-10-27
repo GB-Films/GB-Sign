@@ -4,7 +4,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.token.email_verified == true;
     }
 
     function userEmail() {
@@ -73,15 +73,15 @@ service cloud.firestore {
     }
 
     match /projects/{projectId} {
-      allow create: if isAdmin()
+      allow create: if isAdmin() && !projectId.matches('goat_.*')
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerEmail == userEmail()
         && request.resource.data.collaboratorEmails is list;
 
       allow get: if isAdmin() || isOwnerProjectDoc() || isCollaboratorProjectDoc();
       allow list: if isAdmin() || isOwnerProjectDoc() || isCollaboratorProjectDoc();
-      allow update: if isProjectOwner(projectId) || isAdmin();
-      allow delete: if isProjectOwner(projectId) || isAdmin();
+      allow update: if (isProjectOwner(projectId) || isAdmin()) && !resource.data.get('portalManaged', false);
+      allow delete: if (isProjectOwner(projectId) || isAdmin()) && !resource.data.get('portalManaged', false);
 
       match /members/{memberId} {
         allow read: if isProjectUser(projectId);
@@ -90,9 +90,9 @@ service cloud.firestore {
 
       match /documents/{docId} {
         allow create: if isProjectUser(projectId)
-          && request.resource.data.signerEmails is list;
+          && request.resource.data.signerEmails is list && !request.resource.data.get('portalManaged', false);
 
-        allow update, delete: if isProjectUser(projectId);
+        allow update, delete: if isProjectUser(projectId) && !resource.data.get('portalManaged', false) && !resource.data.get('signatureLocked', false);
         allow get, list: if isProjectUser(projectId) || isDocumentSigner();
 
         match /signatures/{uid} {
@@ -150,10 +150,14 @@ service cloud.firestore {
     match /signatureRequests/{requestId} {
       allow create, update: if signedIn()
         && isProjectUser(request.resource.data.projectId)
+        && !get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)/documents/$(request.resource.data.docId)).data.get('portalManaged', false)
+        && !get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)/documents/$(request.resource.data.docId)).data.get('signatureLocked', false)
         && request.resource.data.signerEmail in get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)/documents/$(request.resource.data.docId)).data.signerEmails;
 
       allow delete: if signedIn()
-        && isProjectUser(resource.data.projectId);
+        && isProjectUser(resource.data.projectId)
+        && !resource.data.get('portalManaged', false)
+        && !get(/databases/$(database)/documents/projects/$(resource.data.projectId)/documents/$(resource.data.docId)).data.get('signatureLocked', false);
 
       allow get: if isSignatureRequestSigner()
         || isProjectUser(resource.data.projectId);

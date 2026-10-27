@@ -1,7 +1,7 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function signedIn() { return request.auth != null; }
+    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
     function email() { return request.auth.token.email.lower(); }
     function project(projectId) {
       return firestore.get(/databases/(default)/documents/projects/$(projectId));
@@ -27,11 +27,13 @@ service firebase.storage {
     match /projects/{projectId}/documents/{docId}/{fileName} {
       allow read: if isProjectUser(projectId) || isSigner(projectId, docId);
       allow write: if isProjectUser(projectId)
+        && !document(projectId, docId).data.get('portalManaged', false)
+        && !document(projectId, docId).data.get('signatureLocked', false)
         && request.resource.size < 50 * 1024 * 1024
         && request.resource.contentType.matches('application/pdf|image/.*|application/vnd.openxmlformats-officedocument.*|application/msword|text/plain');
     }
 
-    match /projects/{projectId}/artifacts/{docId}/{fileName} {
+    match /projects/{projectId}/artifacts/{docId}/{fileName=**} {
       allow read: if isProjectUser(projectId) || isSigner(projectId, docId);
       // Los PDFs firmados/certificados se escriben exclusivamente desde Cloud Functions con Admin SDK.
       allow write: if false;

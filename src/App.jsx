@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut, sendEmailVerification } from 'firebase/auth';
 import {
   ArrowRight, CheckCircle2, ChevronDown, ClipboardCopy, Download, ExternalLink,
   FileCheck2, FileSignature, FolderKanban, FolderPlus, LayoutDashboard,
@@ -26,7 +26,7 @@ const MIN_SIGNATURE_FIELD_H = 0.075;
 const MAX_SIGNATURE_FIELD_VISUAL_W = 0.32;
 const MAX_SIGNATURE_FIELD_VISUAL_H = 0.095;
 
-const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada por Google, fecha, evidencia técnica y vinculación al hash del documento.';
+const ACCEPTANCE_TEXT = 'Declaro que revisé el documento indicado, acepto firmarlo electrónicamente, y entiendo que esta acción registra mi identidad autenticada con la cuenta indicada, fecha, evidencia técnica y vinculación al hash del documento.';
 
 function getRouteParams() {
   const search = new URLSearchParams(window.location.search);
@@ -50,7 +50,7 @@ function getRouteParams() {
     if (!mobileCapture && (parts[0] === 'mobileCapture' || parts[0] === 'mobile-capture') && parts[1]) mobileCapture = decodeURIComponent(parts[1]);
     if (!captureSession && (parts[0] === 'mobileCapture' || parts[0] === 'mobile-capture') && parts[2]) captureSession = decodeURIComponent(parts[2]);
   }
-  return { sign, mobileSign, mobileCapture, captureSession };
+  return { sign, mobileSign, mobileCapture, captureSession, project:/^[A-Za-z0-9_-]{6,160}$/.test(search.get('project')||'')?search.get('project'):'' };
 }
 
 function publicAppUrl() {
@@ -73,7 +73,7 @@ function useAuth() {
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u);
     setLoading(false);
-    if (u) {
+    if (u?.emailVerified) {
       await setDoc(doc(db, 'users', u.uid), {
         uid: u.uid,
         email: normalizeEmail(u.email),
@@ -91,7 +91,7 @@ function useAdmin(user) {
   const [loadingAdmin, setLoadingAdmin] = useState(true);
 
   useEffect(() => {
-    if (!user) {
+    if (!user?.emailVerified) {
       setIsAdmin(false);
       setLoadingAdmin(false);
       return;
@@ -113,7 +113,7 @@ export default function App() {
   const { user, loading } = useAuth();
   const { isAdmin, loadingAdmin } = useAdmin(user);
   const [projects, setProjects] = useState([]);
-  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState(()=>getRouteParams().project);
   const [documents, setDocuments] = useState([]);
   const [pending, setPending] = useState([]);
   const [signaturesByDoc, setSignaturesByDoc] = useState({});
@@ -122,7 +122,7 @@ export default function App() {
   const [mobileCaptureRequestId, setMobileCaptureRequestId] = useState(() => getRouteParams().mobileCapture);
   const [captureSessionId, setCaptureSessionId] = useState(() => getRouteParams().captureSession);
   const [focusedRequestId, setFocusedRequestId] = useState('');
-  const [activeView, setActiveView] = useState('overview');
+  const [activeView, setActiveView] = useState(()=>getRouteParams().project?'projects':'overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
@@ -142,12 +142,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user || loadingAdmin) return;
+    if (!user?.emailVerified || loadingAdmin) return;
     setProjects([]);
     if (isAdmin) {
       return onSnapshot(collection(db, 'projects'), (snap) => {
         setProjects(snap.docs
           .map((projectDoc) => ({ id: projectDoc.id, ...projectDoc.data() }))
+          .filter(p=>p.id!=='goat_portal_declarations')
           .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
       }, (err) => console.warn('No se pudieron cargar todos los proyectos:', err.message));
     }
@@ -204,6 +205,7 @@ export default function App() {
 
   if (loading || loadingAdmin) return <LoadingScreen />;
   if (!user) return <Login />;
+  if(!user.emailVerified) return <main className="appShell"><Card><h1>Verificá tu correo</h1><p>{user.email}</p><Button onClick={async()=>{try{await sendEmailVerification(user);alert('Enlace enviado. Revisá tu correo.');}catch{alert('No pudimos enviar el enlace. Probá más tarde.');}}}>Enviar enlace de verificación</Button><Button onClick={async()=>{await user.reload();await user.getIdToken(true);window.location.reload();}}>Ya lo verifiqué</Button><Button onClick={()=>signOut(auth)}>Cerrar sesión</Button></Card></main>;
   if (mobileCaptureRequestId) return <MobileCaptureRoute requestId={mobileCaptureRequestId} sessionId={captureSessionId} pending={pending} user={user} />;
   if (mobileRequestId) return <MobileSignRoute requestId={mobileRequestId} pending={pending} user={user} />;
 
@@ -290,7 +292,7 @@ export default function App() {
           </>}
 
           {(activeView === 'signatures' || isSignerOnly) && <>
-            {!isSignerOnly && <section className="pageHeading"><div><span className="eyebrow">Bandeja personal</span><h1>Mis firmas</h1><p>Cada solicitud asociada a tu cuenta de Google, con su estado y descargas.</p></div></section>}
+            {!isSignerOnly && <section className="pageHeading"><div><span className="eyebrow">Bandeja personal</span><h1>Mis firmas</h1><p>Cada solicitud asociada a tu cuenta verificada, con su estado y descargas.</p></div></section>}
             <Card className="signatureInbox">
               <div className="cardHead"><div><h2>Documentos asignados</h2><p className="muted">{pending.length ? `${pending.length} ${pending.length === 1 ? 'solicitud' : 'solicitudes'} en total` : 'Tu bandeja está al día'}</p></div><FileSignature size={22}/></div>
               <PendingList requests={pending} user={user} directRequestId={directRequestId} onFocus={setFocusedRequestId}/>
@@ -329,7 +331,7 @@ function ProjectList({ projects, selectedProjectId, onSelect }) {
 
 function PendingList({ requests, user, directRequestId, onFocus }) {
   return <div className="list pendingList">
-    {directRequestId && requests.length > 0 && !requests.some((item) => item.id === directRequestId) && <div className="directLinkWarning"><strong>No encontramos el documento de este link.</strong><span>Verificá que hayas ingresado con la cuenta de Google que recibió la invitación.</span></div>}
+    {directRequestId && requests.length > 0 && !requests.some((item) => item.id === directRequestId) && <div className="directLinkWarning"><strong>No encontramos el documento de este link.</strong><span>Verificá que hayas ingresado con la cuenta que recibió la invitación.</span></div>}
     {requests.map((request) => <PendingDoc key={request.id} request={request} user={user} directOpen={directRequestId === request.id} onFocus={onFocus}/>)}
     {!requests.length && <Empty title="No tenés firmas pendientes">Las solicitudes nuevas vinculadas a este correo van a aparecer acá.</Empty>}
   </div>;
@@ -340,6 +342,8 @@ function SignerWelcome({ user }) {
 }
 
 function Login() {
+  const [loginError,setLoginError]=useState(''),[connecting,setConnecting]=useState(false);
+  async function login(){setConnecting(true);setLoginError('');try{await signInWithPopup(auth,provider);}catch(e){setLoginError(e.code==='auth/operation-not-allowed'?'El ingreso con Google no está habilitado. Contactá a administración.':'No pudimos completar el ingreso con Google. Revisá la ventana de acceso y volvé a intentar.');}finally{setConnecting(false);}}
   const { sign: directRequestId, mobileSign: mobileRequestId, mobileCapture: mobileCaptureRequestId } = getRouteParams();
   return <main className="login">
     <section className="loginFrame">
@@ -347,7 +351,7 @@ function Login() {
         <AppBrand />
         <div className="loginHeadline"><span className="eyebrow">Contratos, sin fricción</span><h1>Firmas claras.<br/>Evidencia sólida.</h1><p>Un espacio simple para revisar, firmar y conservar cada documento entre las partes.</p></div>
         <div className="trustList">
-          <span><CheckCircle2 size={17}/> Identidad vinculada a Google</span>
+          <span><CheckCircle2 size={17}/> Identidad vinculada a tu cuenta</span>
           <span><CheckCircle2 size={17}/> Documento protegido por hash</span>
           <span><CheckCircle2 size={17}/> Certificado de evidencia descargable</span>
         </div>
@@ -356,10 +360,10 @@ function Login() {
       <div className="loginAccess">
         <Card className="loginCard">
           <span className="accessIcon"><LockKeyhole size={22}/></span>
-          <div><span className="eyebrow">Acceso seguro</span><h2>Entrá a tu cuenta</h2><p>Usá el mismo correo de Google con el que recibiste la invitación o administrás proyectos.</p></div>
+          <div><span className="eyebrow">Acceso seguro</span><h2>Entrá a tu cuenta</h2><p>Usá el mismo correo con el que recibiste la invitación o administrás proyectos.</p></div>
           {(directRequestId || mobileRequestId || mobileCaptureRequestId) && <div className="directLoginNotice"><strong>{mobileCaptureRequestId ? 'Firma iniciada desde el celular' : mobileRequestId ? 'Solicitud móvil detectada' : 'Tenés un documento esperando'}</strong><span>Al ingresar vas a continuar directamente con esta solicitud.</span></div>}
-          <Button className="googleButton" onClick={() => signInWithPopup(auth, provider)}><span className="googleG">G</span> Continuar con Google <ArrowRight size={17}/></Button>
-          <p className="privacyNote"><ShieldCheck size={15}/> Sólo mostramos información vinculada a tu cuenta.</p>
+          <Button className="googleButton" disabled={connecting} onClick={login}><span className="googleG">G</span> Continuar con Google <ArrowRight size={17}/></Button>
+          {loginError&&<p role="alert" className="muted">{loginError}</p>}<p className="privacyNote"><ShieldCheck size={15}/> Sólo mostramos información vinculada a tu cuenta.</p>
         </Card>
       </div>
     </section>
@@ -435,7 +439,7 @@ function CreateProject({ onCreated }) {
 
 function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin, onProjectDeleted }) {
   const isOwner = project.ownerUid === user.uid;
-  const canManageMembers = isAdmin || isOwner;
+  const canManageMembers = (isAdmin || isOwner) && !project.portalManaged;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -469,8 +473,8 @@ function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin, onPr
 
     {settingsOpen && <Card className="settingsCard">
       <div className="cardHead"><div><span className="eyebrow">Accesos</span><h3>Equipo del proyecto</h3></div><Button variant="ghost" type="button" onClick={() => setSettingsOpen(false)}>Cerrar</Button></div>
-      <Members project={project} currentUser={user} canManage={canManageMembers}/>
-      {isAdmin && <div className="dangerZone"><div><strong>Eliminar proyecto</strong><small>Borra documentos, solicitudes, firmas y archivos asociados.</small></div><Button variant="danger" type="button" onClick={deleteProject} disabled={deletingProject}><Trash2 size={16}/>{deletingProject ? 'Borrando...' : 'Borrar proyecto'}</Button></div>}
+      {project.portalManaged&&<p className="muted">Los accesos a este proyecto se administran desde GOAT.</p>}<Members project={project} currentUser={user} canManage={canManageMembers}/>
+      {isAdmin && !project.portalManaged && <div className="dangerZone"><div><strong>Eliminar proyecto</strong><small>Borra documentos, solicitudes, firmas y archivos asociados.</small></div><Button variant="danger" type="button" onClick={deleteProject} disabled={deletingProject}><Trash2 size={16}/>{deletingProject ? 'Borrando...' : 'Borrar proyecto'}</Button></div>}
     </Card>}
 
     {uploadOpen && <Card className="uploadCard"><div className="cardHead"><div><span className="eyebrow">Nueva solicitud</span><h3>Cargar documento</h3><p className="muted">Definí los firmantes y marcá el lugar exacto de cada firma.</p></div><Upload size={22}/></div><UploadDocument project={project}/></Card>}
@@ -556,7 +560,7 @@ function UploadDocument({ project }) {
 
   return <form className="stack" onSubmit={submit}>
     <Field label="Título"><input value={title} onChange={(e)=>setTitle(e.target.value)} placeholder="Ej: Cesión de imagen - Actor"/></Field>
-    <Field label="Mails de Google de firmantes externos" hint="Estos correos solo podrán ver y firmar este documento puntual. No son colaboradores internos."><textarea value={emails} onChange={(e)=>setEmails(e.target.value)} placeholder="persona@gmail.com, otra@empresa.com"/></Field>
+    <Field label="Correos de firmantes externos" hint="Estos correos solo podrán ver y firmar este documento puntual. No son colaboradores internos."><textarea value={emails} onChange={(e)=>setEmails(e.target.value)} placeholder="persona@gmail.com, otra@empresa.com"/></Field>
     <Field label="Archivo"><input type="file" accept="application/pdf,image/*,.doc,.docx" onChange={(e)=>setFile(e.target.files?.[0] || null)}/></Field>
     {file && signerEmails.length > 0 && <SignatureFieldDesigner fileUrl={fileUrl} fileName={file.name} contentType={file.type} signerEmails={signerEmails} fields={signatureFields} onChange={setSignatureFields}/>} 
     <Button disabled={busy}>{busy ? 'Subiendo...' : 'Cargar y solicitar firmas'}</Button>
@@ -688,11 +692,11 @@ function DocumentRow({ project, docu, signatures, isAdmin }) {
     <div className="tr"><span data-label="Documento"><strong>{docu.title}</strong><small>{docu.fileName}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span data-label="Firmantes">{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span data-label="Estado"><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions adminActions" data-label="Acciones">
       <IconAction label="Ver original" onClick={openFile}><ExternalLink size={16}/></IconAction>
       <IconAction label="Links y QR" onClick={() => setShareOpen((v)=>!v)} active={shareOpen}><QrCode size={16}/></IconAction>
-      <IconAction label="Campos de firma" onClick={() => setEditFields((v)=>!v)} active={editFields}><PenLine size={16}/></IconAction>
+      <IconAction disabled={docu.signatureLocked||docu.portalManaged} label="Campos de firma" onClick={() => setEditFields((v)=>!v)} active={editFields}><PenLine size={16}/></IconAction>
       <IconAction label={pdfBusy === 'signed' ? 'Generando PDF firmado...' : 'Descargar PDF firmado'} onClick={downloadSignedPdf} disabled={pdfBusy === 'signed'}><FileSignature size={16}/></IconAction>
       <IconAction label={pdfBusy === 'certificate' ? 'Generando certificado...' : 'Descargar certificado de evidencia'} onClick={downloadCertificatePdf} disabled={pdfBusy === 'certificate'}><ShieldCheck size={16}/></IconAction>
       <IconAction label="Descargar evidencia técnica JSON" onClick={evidence}><ClipboardCopy size={16}/></IconAction>
-      {isAdmin && <IconAction danger label={deletingDoc ? 'Borrando documento...' : 'Borrar documento'} onClick={deleteDocument} disabled={deletingDoc}><Trash2 size={16}/></IconAction>}
+      {isAdmin && !docu.signatureLocked && !docu.portalManaged && <IconAction danger label={deletingDoc ? 'Borrando documento...' : 'Borrar documento'} onClick={deleteDocument} disabled={deletingDoc}><Trash2 size={16}/></IconAction>}
     </span></div>
     {shareOpen && <SignatureSharePanel project={project} docu={docu}/>}
     {editFields && <EditSignatureFields project={project} docu={docu} onClose={() => setEditFields(false)}/>} 
@@ -711,7 +715,7 @@ function SignatureSharePanel({ project, docu }) {
   if (!signerEmails.length) return <div className="editorRow"><Card><p className="muted">Este documento no tiene firmantes externos asignados.</p></Card></div>;
   return <div className="editorRow"><Card className="sharePanel">
     <div className="cardHead"><h3>Compartir link directo de firma</h3><QrCode size={22}/></div>
-    <p className="muted">Cada link es específico para un mail. El firmante entra, inicia sesión con ese Google y va directo al documento. El link abre directo el documento. El QR abre un flujo móvil completo para revisar y firmar desde el celular.</p>
+    <p className="muted">Cada link es específico para un mail. El firmante entra, inicia sesión con esa cuenta y va directo al documento. El link abre directo el documento. El QR abre un flujo móvil completo para revisar y firmar desde el celular.</p>
     <div className="shareGrid">
       {signerEmails.map((email) => <SignatureShareRow key={email} project={project} docu={docu} email={email}/>) }
     </div>
@@ -725,7 +729,7 @@ function SignatureShareRow({ project, docu, email }) {
   const link = signingLink(requestId);
   const qrLink = mobileSigningLink(requestId);
   const subject = `Firma solicitada: ${docu.title || docu.fileName || 'documento'}`;
-  const body = `Hola,\n\nTe comparto el link directo para revisar y firmar el documento \"${docu.title || docu.fileName || 'documento'}\" en GB Sign.\n\nTenés que ingresar con este mail de Google: ${email}\n\nLink de firma:\n${link}\n\nGracias.`;
+  const body = `Hola,\n\nTe comparto el link directo para revisar y firmar el documento \"${docu.title || docu.fileName || 'documento'}\" en GB Sign.\n\nTenés que ingresar con este correo: ${email}\n\nLink de firma:\n${link}\n\nGracias.`;
   const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
   useEffect(() => {
@@ -1258,7 +1262,7 @@ function MobileSignRoute({ requestId, pending, user }) {
     return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>Buscando solicitud de firma...</p></Card></main>;
   }
   if (!request) {
-    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo Google que fue invitado a firmar.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
+    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo correo que fue invitado a firmar.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
   }
   return <main className="mobileSignShell fullMobile"><MobileFullSigningRoom request={request} user={user}/></main>;
 }
@@ -1278,7 +1282,7 @@ function MobileCaptureRoute({ requestId, sessionId, pending, user }) {
     return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>Buscando sesión de captura...</p></Card></main>;
   }
   if (!request) {
-    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo Google que está firmando en la computadora.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
+    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo correo que está firmando en la computadora.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
   }
   return <main className="mobileSignShell"><MobileSignatureCaptureOnly request={request} sessionId={sessionId} user={user}/></main>;
 }
@@ -1313,6 +1317,7 @@ function MobileSignatureCaptureOnly({ request, sessionId, user }) {
         requestId: request.id,
         projectId: request.projectId,
         docId: request.docId,
+        documentSha256: request.sha256,
         signerEmail: normalizeEmail(user.email),
         uid: user.uid,
         displayName: user.displayName || '',
@@ -1422,6 +1427,7 @@ function MobileFullSigningRoom({ request, user }) {
       await signDocument({
         projectId: request.projectId,
         docId: request.docId,
+        documentSha256: request.sha256,
         requestId: request.id,
         fieldId: activeField.id,
         signatureField: activeField,
@@ -1559,6 +1565,7 @@ function SigningRoom({ request, user, docu }) {
       await signDocument({
         projectId: request.projectId,
         docId: request.docId,
+        documentSha256: request.sha256,
         requestId: request.id,
         fieldId: activeField.id,
         signatureField: activeField,

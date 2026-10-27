@@ -1,5 +1,7 @@
 # GB Sign
 
+La integración de esta rama con el portal de proveedores GOAT y las declaraciones administradas por servidor, con acceso exclusivamente por Google, se describe en [docs/goat-provider-portal.md](docs/goat-provider-portal.md). Su activación requiere configuración coordinada de ambos backends.
+
 App web de firma electrónica para **GB Films / Gran Berta**, publicada en **GitHub Pages** y usando **Firebase** como backend.
 
 Repositorio:
