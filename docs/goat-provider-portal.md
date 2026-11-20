@@ -21,3 +21,12 @@ npm run build
 ```
 
 La prueba conjunta en GOAT ejecuta en emuladores el motor de esta rama con PDFs reales y verifica que los datos comunes se apliquen y los críticos queden en revisión. El contexto de producción y el consentimiento OAuth real deben comprobarse por separado antes de habilitar usuarios.
+# Acceso a solicitudes y PDFs en GBSign
+
+En Mis firmas, cada cuenta Google verificada consulta las solicitudes de su correo. Al abrir una, GBSign escucha el documento para mostrar el estado actual. La firma se registra en el servidor, que comprueba el correo asignado, el documento, el recuadro y la versión del PDF.
+
+Una solicitud nativa nueva se registra junto con la referencia al original. Una vez creada, su asignación se conserva. El equipo del proyecto puede corregir recuadros de una solicitud pendiente. El estado de firma y la evidencia se escriben desde el servidor. Las solicitudes de GOAT siguen a cargo de la integración.
+
+El PDF firmado se descarga con la sesión de la cuenta. En el celular y la computadora, abrir una firma ya registrada muestra el estado y las descargas disponibles. Si existe un PDF final, se reutiliza. Los enlaces de firma abren la solicitud y requieren la cuenta asignada.
+
+Para publicar los cambios, verificar primero el flujo de la nueva web con cuentas de prueba. Después publicar las reglas de Firestore y la revisión de la función de firma, y comprobar la creación, el ajuste de recuadros pendientes y la descarga autenticada.

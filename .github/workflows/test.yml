@@ -17,4 +17,9 @@ jobs:
       - run: npm ci --prefix functions
       - run: npm test --prefix functions
       - run: node --check functions/index.js
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npx --yes firebase-tools@15.22.1 emulators:exec --project demo-gb-sign-access --only firestore,storage "node tests/signatureAccess.emulator.mjs"
       - run: npm run build
