@@ -82,6 +82,7 @@ export const signDocument = onCall({ timeoutSeconds: 120, memory: '1GiB' }, asyn
     if (normalizeEmail(req.signerEmail || '') !== auth.email || req.projectId !== projectId || req.docId !== docId) {
       throw new HttpsError('permission-denied', 'La solicitud de firma no corresponde a este documento o firmante.');
     }
+    if (req.status === 'signed') throw new HttpsError('already-exists', 'Esta solicitud ya tiene una firma.');
 
     const field = (docu.signatureFields || []).find((f) => String(f.id || '') === fieldId && normalizeEmail(f.signerEmail || '') === auth.email);
     if (!field) throw new HttpsError('permission-denied', 'El campo de firma no corresponde a este firmante.');

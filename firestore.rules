@@ -57,6 +57,35 @@ service cloud.firestore {
         && resource.data.signerEmail == userEmail();
     }
 
+    // A request binds one assigned email to one stored document. The signing
+    // function alone writes signed status, timestamps and signature evidence.
+    function validRequestAssignment(data) {
+      let source = getAfter(/databases/$(database)/documents/projects/$(data.projectId)/documents/$(data.docId)).data;
+      return source != null
+        && !source.get('portalManaged', false) && !source.get('signatureLocked', false)
+        && source.signerEmails is list && data.signerEmail in source.signerEmails
+        && data.signatureFields is list && data.signatureFields.size() <= 100
+        && data.updatedAt == request.time;
+    }
+
+    function validNewSignatureRequest(data) {
+      let source = getAfter(/databases/$(database)/documents/projects/$(data.projectId)/documents/$(data.docId)).data;
+      return data.keys().hasOnly(['projectId','projectName','projectClient','docId','title','fileName',
+        'contentType','storagePath','sha256','signerEmail','allSignerEmails','signatureFields',
+        'requestedByUid','requestedByEmail','createdAt','updatedAt','status'])
+        && data.title is string && data.title.size() <= 500
+        && data.fileName is string && data.fileName.size() <= 255
+        && data.projectName is string && data.projectName.size() <= 500
+        && data.projectClient is string && data.projectClient.size() <= 500
+        && data.contentType is string && data.contentType.size() <= 200
+        && data.storagePath is string && data.storagePath.size() <= 1024 && data.storagePath == source.storagePath
+        && data.sha256 is string && data.sha256.size() == 64 && data.sha256 == source.sha256
+        && data.allSignerEmails == source.signerEmails && data.allSignerEmails.size() <= 100
+        && data.get('status', 'pending') == 'pending'
+        && data.requestedByUid == request.auth.uid && data.requestedByEmail == userEmail()
+        && data.createdAt == request.time && validRequestAssignment(data);
+    }
+
     match /admins/{uid} {
       allow get: if signedIn() && uid == request.auth.uid;
       allow list: if false;
@@ -148,15 +177,23 @@ service cloud.firestore {
     }
 
     match /signatureRequests/{requestId} {
-      allow create, update: if signedIn()
+      allow create: if signedIn()
+        && request.resource.data.projectId is string && request.resource.data.projectId.size() <= 160
+        && request.resource.data.docId is string && request.resource.data.docId.size() <= 160
+        && request.resource.data.signerEmail is string && request.resource.data.signerEmail.size() <= 254
         && isProjectUser(request.resource.data.projectId)
-        && !get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)/documents/$(request.resource.data.docId)).data.get('portalManaged', false)
-        && !get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)/documents/$(request.resource.data.docId)).data.get('signatureLocked', false)
-        && request.resource.data.signerEmail in get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)/documents/$(request.resource.data.docId)).data.signerEmails;
+        && validNewSignatureRequest(request.resource.data);
+
+      allow update: if signedIn()
+        && isProjectUser(resource.data.projectId)
+        && !resource.data.get('portalManaged', false) && resource.data.get('status', '') in ['', 'pending']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['signatureFields', 'updatedAt'])
+        && validRequestAssignment(request.resource.data);
 
       allow delete: if signedIn()
         && isProjectUser(resource.data.projectId)
         && !resource.data.get('portalManaged', false)
+        && resource.data.get('status', '') in ['', 'pending']
         && !get(/databases/$(database)/documents/projects/$(resource.data.projectId)/documents/$(resource.data.docId)).data.get('signatureLocked', false);
 
       allow get: if isSignatureRequestSigner()

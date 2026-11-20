@@ -5,7 +5,7 @@ import {
   serverTimestamp, setDoc, updateDoc, where, writeBatch
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { getBlob, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged, signInWithPopup, signOut, sendEmailVerification } from 'firebase/auth';
 import {
   ArrowRight, CheckCircle2, ChevronDown, ClipboardCopy, Download, ExternalLink,
@@ -115,7 +115,10 @@ export default function App() {
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState(()=>getRouteParams().project);
   const [documents, setDocuments] = useState([]);
-  const [pending, setPending] = useState([]);
+  const [requests, setRequests] = useState(null);
+  const requestAccount = user?.emailVerified ? `${user.uid}:${normalizeEmail(user.email)}` : '';
+  const currentRequests = requests?.account === requestAccount ? requests : null;
+  const pending = currentRequests?.items || [];
   const [signaturesByDoc, setSignaturesByDoc] = useState({});
   const [directRequestId, setDirectRequestId] = useState(() => getRouteParams().sign);
   const [mobileRequestId, setMobileRequestId] = useState(() => getRouteParams().mobileSign);
@@ -163,12 +166,14 @@ export default function App() {
   }, [user, isAdmin, loadingAdmin]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!requestAccount) { setRequests(null); return; }
     const q = query(collection(db, 'signatureRequests'), where('signerEmail', '==', normalizeEmail(user.email)));
-    return onSnapshot(q, (snap) => {
-      setPending(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-    }, (err) => console.warn('No se pudieron cargar firmas pendientes:', err.message));
-  }, [user]);
+    return onSnapshot(q, { includeMetadataChanges: true }, (snap) => {
+      if (snap.metadata.fromCache) return;
+      setRequests({ account: requestAccount, items: snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)) });
+    }, () => setRequests({ account: requestAccount, error: true }));
+  }, [requestAccount]);
 
   useEffect(() => {
     if (!selectedProjectId) { setDocuments([]); return; }
@@ -206,11 +211,21 @@ export default function App() {
   if (loading || loadingAdmin) return <LoadingScreen />;
   if (!user) return <Login />;
   if(!user.emailVerified) return <main className="appShell"><Card><h1>Verificá tu correo</h1><p>{user.email}</p><Button onClick={async()=>{try{await sendEmailVerification(user);alert('Enlace enviado. Revisá tu correo.');}catch{alert('No pudimos enviar el enlace. Probá más tarde.');}}}>Enviar enlace de verificación</Button><Button onClick={async()=>{await user.reload();await user.getIdToken(true);window.location.reload();}}>Ya lo verifiqué</Button><Button onClick={()=>signOut(auth)}>Cerrar sesión</Button></Card></main>;
-  if (mobileCaptureRequestId) return <MobileCaptureRoute requestId={mobileCaptureRequestId} sessionId={captureSessionId} pending={pending} user={user} />;
-  if (mobileRequestId) return <MobileSignRoute requestId={mobileRequestId} pending={pending} user={user} />;
+  const linkedRequestId = mobileCaptureRequestId || mobileRequestId || directRequestId;
+  const linkedRequest = linkedRequestId && pending.find(item => item.id === linkedRequestId);
+  if (linkedRequestId && !linkedRequest) {
+    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1>
+      <p>{!currentRequests ? 'Buscando tu solicitud de firma…' : currentRequests.error
+        ? 'No pudimos comprobar el acceso. Recargá la página para intentar de nuevo.'
+        : `No encontramos esta solicitud para ${normalizeEmail(user.email)}. Ingresá con el correo al que se asignó la firma.`}</p>
+      {currentRequests && !currentRequests.error && <Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button>}
+    </Card></main>;
+  }
+  if (mobileCaptureRequestId) return <MobileCaptureRoute request={linkedRequest} sessionId={captureSessionId} user={user} />;
+  if (mobileRequestId) return <main className="mobileSignShell fullMobile"><MobileFullSigningRoom key={requestAccount + mobileRequestId} request={linkedRequest} user={user} /></main>;
 
   const focusedRequest = pending.find((item) => item.id === (focusedRequestId || directRequestId));
-  if (focusedRequest) return <FocusedSignerPage request={focusedRequest} user={user} roleLabel={roleLabel} onClose={() => { setFocusedRequestId(''); if (directRequestId) setDirectRequestId(''); }} />;
+  if (focusedRequest) return <FocusedSignerPage key={requestAccount + focusedRequest.id} request={focusedRequest} user={user} roleLabel={roleLabel} onClose={() => { setFocusedRequestId(''); if (directRequestId) setDirectRequestId(''); }} />;
 
   return (
     <main className="appShell">
@@ -274,7 +289,7 @@ export default function App() {
                   <div><span className="eyebrow">Tu bandeja</span><h2>Firmas asignadas</h2></div>
                   <button className="textAction" type="button" onClick={() => setActiveView('signatures')}>Ver todas <ArrowRight size={15}/></button>
                 </div>
-                <PendingList requests={pending.slice(0, 3)} user={user} directRequestId={directRequestId} onFocus={setFocusedRequestId}/>
+                <PendingList requests={pending.slice(0, 3)} inbox={currentRequests} user={user} onFocus={setFocusedRequestId}/>
               </Card>
             </section>
           </>}
@@ -295,7 +310,7 @@ export default function App() {
             {!isSignerOnly && <section className="pageHeading"><div><span className="eyebrow">Bandeja personal</span><h1>Mis firmas</h1><p>Cada solicitud asociada a tu cuenta verificada, con su estado y descargas.</p></div></section>}
             <Card className="signatureInbox">
               <div className="cardHead"><div><h2>Documentos asignados</h2><p className="muted">{pending.length ? `${pending.length} ${pending.length === 1 ? 'solicitud' : 'solicitudes'} en total` : 'Tu bandeja está al día'}</p></div><FileSignature size={22}/></div>
-              <PendingList requests={pending} user={user} directRequestId={directRequestId} onFocus={setFocusedRequestId}/>
+              <PendingList requests={pending} inbox={currentRequests} user={user} onFocus={setFocusedRequestId}/>
             </Card>
           </>}
         </div>
@@ -329,10 +344,11 @@ function ProjectList({ projects, selectedProjectId, onSelect }) {
   </button>)}</div>;
 }
 
-function PendingList({ requests, user, directRequestId, onFocus }) {
+function PendingList({ requests, inbox, user, onFocus }) {
+  if (!inbox) return <p className="muted">Cargando tus solicitudes…</p>;
+  if (inbox.error) return <p role="alert">No pudimos cargar tus solicitudes. Recargá la página para intentar de nuevo.</p>;
   return <div className="list pendingList">
-    {directRequestId && requests.length > 0 && !requests.some((item) => item.id === directRequestId) && <div className="directLinkWarning"><strong>No encontramos el documento de este link.</strong><span>Verificá que hayas ingresado con la cuenta que recibió la invitación.</span></div>}
-    {requests.map((request) => <PendingDoc key={request.id} request={request} user={user} directOpen={directRequestId === request.id} onFocus={onFocus}/>)}
+    {requests.map((request) => <PendingDoc key={request.id} request={request} user={user} onFocus={onFocus}/>)}
     {!requests.length && <Empty title="No tenés firmas pendientes">Las solicitudes nuevas vinculadas a este correo van a aparecer acá.</Empty>}
   </div>;
 }
@@ -485,14 +501,16 @@ function ProjectPanel({ project, documents, signaturesByDoc, user, isAdmin, onPr
   </section>;
 }
 
-async function createSignatureRequests(project, docu) {
+function writeSignatureRequests(batch, project, docu, editingFields = false) {
   const signerEmails = docu.signerEmails || [];
-  if (!signerEmails.length) return;
-  const batch = writeBatch(db);
   signerEmails.forEach((signerEmail) => {
     const normalized = normalizeEmail(signerEmail);
     const requestRef = doc(db, 'signatureRequests', signatureRequestId(project.id, docu.id, normalized));
     const signatureFields = (docu.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalized);
+    if (editingFields) {
+      batch.update(requestRef, { signatureFields, updatedAt: serverTimestamp() });
+      return;
+    }
     batch.set(requestRef, {
       projectId: project.id,
       projectName: project.name || '',
@@ -506,13 +524,13 @@ async function createSignatureRequests(project, docu) {
       signerEmail: normalized,
       allSignerEmails: signerEmails.map(normalizeEmail),
       signatureFields,
+      status: 'pending',
       requestedByUid: auth.currentUser.uid,
       requestedByEmail: normalizeEmail(auth.currentUser.email),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    }, { merge: true });
+    });
   });
-  await batch.commit();
 }
 
 function UploadDocument({ project }) {
@@ -531,7 +549,7 @@ function UploadDocument({ project }) {
   async function submit(e) {
     e.preventDefault();
     if (!file || !title.trim()) return;
-    if (signerEmails.length && signatureFields.length < signerEmails.length) {
+    if (signerEmails.some(email => !signatureFields.some(field => normalizeEmail(field.signerEmail) === email))) {
       alert('Falta marcar al menos un recuadro de firma para cada firmante externo.');
       return;
     }
@@ -552,9 +570,13 @@ function UploadDocument({ project }) {
       const storagePath = `projects/${project.id}/documents/${docRef.id}/${file.name}`;
       await uploadBytes(ref(storage, storagePath), file, { contentType: file.type, customMetadata: { projectId: project.id, docId: docRef.id, sha256: hash } });
       const docPayload = { id: docRef.id, projectId: project.id, title: title.trim(), fileName: file.name, contentType: file.type || 'application/octet-stream', storagePath, sha256: hash, signerEmails, signatureFields };
-      await updateDoc(docRef, { storagePath, updatedAt: serverTimestamp() });
-      await createSignatureRequests(project, docPayload);
+      const batch = writeBatch(db);
+      batch.update(docRef, { storagePath, updatedAt: serverTimestamp() });
+      writeSignatureRequests(batch, project, docPayload);
+      await batch.commit();
       setTitle(''); setEmails(''); setFile(null); setSignatureFields([]);
+    } catch (err) {
+      alert(err?.message || 'No pudimos preparar las solicitudes de firma.');
     } finally { setBusy(false); }
   }
 
@@ -591,7 +613,6 @@ function Members({ project, currentUser, canManage }) {
 
 function DocumentRow({ project, docu, signatures, isAdmin }) {
   const [url, setUrl] = useState('');
-  const [busy, setBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState('');
   const [editFields, setEditFields] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -664,29 +685,9 @@ function DocumentRow({ project, docu, signatures, isAdmin }) {
 
 
   async function ensureServerArtifact(type) {
-    // Siempre regeneramos artefactos para usar el último motor de estampado del servidor.
-    const generateArtifacts = httpsCallable(functions, 'generateDocumentArtifacts');
-    const result = await generateArtifacts({ projectId: project.id, docId: docu.id });
-    const data = result.data || {};
-    const path = type === 'signed' ? data.signedPdfPath : data.certificatePdfPath;
-    if (!path) throw new Error('La función no devolvió la ruta del archivo generado.');
-    return path;
+    return ensureServerArtifactForDoc(project.id, docu.id, docu, type);
   }
 
-  async function downloadStoragePath(path, filename) {
-    const u = await getDownloadURL(ref(storage, path));
-    const response = await fetch(u);
-    if (!response.ok) throw new Error(`Storage respondió ${response.status}`);
-    const blob = await response.blob();
-    downloadBytes(filename, blob, blob.type || 'application/pdf');
-  }
-
-
-  async function syncRequests() {
-    setBusy(true);
-    try { await createSignatureRequests(project, docu); }
-    finally { setBusy(false); }
-  }
 
   return <>
     <div className="tr"><span data-label="Documento"><strong>{docu.title}</strong><small>{docu.fileName}<br/>Campos de firma: {(docu.signatureFields || []).length}</small></span><span data-label="Firmantes">{(docu.signerEmails || []).map((e)=><small key={e}>{e}</small>)}</span><span data-label="Estado"><Badge tone={tone}>{statusFor(docu, signatures)}</Badge></span><span className="actions adminActions" data-label="Acciones">
@@ -859,21 +860,37 @@ function signatureStatusRows(docu = {}, currentEmail = '') {
 }
 
 async function ensureServerArtifactForDoc(projectId, docId, docu, type) {
-  // Siempre regeneramos artefactos para usar el último motor de estampado del servidor.
+  const field = type === 'signed' ? 'signedPdfPath' : 'certificatePdfPath';
+  const existing = docu.status === 'completed' && docu.serverArtifacts?.[field];
+  if (existing) return existing;
   const generateArtifacts = httpsCallable(functions, 'generateDocumentArtifacts');
   const result = await generateArtifacts({ projectId, docId });
-  const data = result.data || {};
-  const path = type === 'signed' ? data.signedPdfPath : data.certificatePdfPath;
+  const path = result.data?.[field];
   if (!path) throw new Error('La función no devolvió la ruta del archivo generado.');
   return path;
 }
 
 async function downloadStoragePath(path, filename) {
-  const u = await getDownloadURL(ref(storage, path));
-  const response = await fetch(u);
-  if (!response.ok) throw new Error(`Storage respondió ${response.status}`);
-  const blob = await response.blob();
+  const blob = await getBlob(ref(storage, path));
   downloadBytes(filename, blob, blob.type || 'application/pdf');
+}
+
+function usePrivateDocumentPreview(path) {
+  const [preview, setPreview] = useState(null);
+  useEffect(() => {
+    if (!path) return;
+    let disposed = false;
+    let url;
+    getBlob(ref(storage, path)).then(blob => {
+      if (disposed) return;
+      url = URL.createObjectURL(blob);
+      setPreview({ path, url });
+    }).catch(() => {
+      if (!disposed) setPreview({ path, error: 'No pudimos abrir el documento con esta cuenta.' });
+    });
+    return () => { disposed = true; if (url) URL.revokeObjectURL(url); };
+  }, [path]);
+  return preview?.path === path ? preview : {};
 }
 
 function dataUrlToBytes(dataUrl = '') {
@@ -1143,9 +1160,16 @@ function EditSignatureFields({ project, docu, onClose }) {
     setBusy(true);
     try {
       const normalizedFields = normalizeSignatureFields(fields);
-      await updateDoc(doc(db, 'projects', project.id, 'documents', docu.id), { signatureFields: normalizedFields, updatedAt: serverTimestamp() });
-      await createSignatureRequests(project, { ...docu, signatureFields: normalizedFields });
+      if ((docu.signerEmails || []).some(email => !normalizedFields.some(field => normalizeEmail(field.signerEmail) === normalizeEmail(email)))) {
+        throw new Error('Cada firmante necesita al menos un recuadro de firma.');
+      }
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'projects', project.id, 'documents', docu.id), { signatureFields: normalizedFields, updatedAt: serverTimestamp() });
+      writeSignatureRequests(batch, project, { ...docu, signatureFields: normalizedFields }, true);
+      await batch.commit();
       onClose();
+    } catch (err) {
+      alert(err?.message || 'No pudimos guardar los recuadros de firma.');
     } finally { setBusy(false); }
   }
   return <div className="editorRow"><Card>
@@ -1156,8 +1180,10 @@ function EditSignatureFields({ project, docu, onClose }) {
 }
 
 function PendingDoc({ request, user, directOpen = false, onFocus, focusMode = false }) {
-  const [signed, setSigned] = useState(false);
+  const [legacySigned, setLegacySigned] = useState(false);
   const [open, setOpen] = useState(Boolean(directOpen));
+  const isOpen = focusMode || open;
+  const signed = request.status === 'signed' || legacySigned;
   const blockRef = useRef(null);
   const [docu, setDocu] = useState(null);
   const [downloadBusy, setDownloadBusy] = useState('');
@@ -1169,12 +1195,18 @@ function PendingDoc({ request, user, directOpen = false, onFocus, focusMode = fa
     }
   }, [directOpen]);
 
-  useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid), (snap) => setSigned(snap.exists()),
-    (err) => console.warn('No se pudo cargar estado de firma:', err.message)), [request.projectId, request.docId, user.uid]);
+  useEffect(() => {
+    if (request.status) return;
+    return onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId, 'signatures', user.uid),
+      snap => setLegacySigned(snap.exists()), err => console.warn('No se pudo cargar estado de firma:', err.message));
+  }, [request.projectId, request.docId, request.status, user.uid]);
 
-  useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId), (snap) => {
-    if (snap.exists()) setDocu({ id: snap.id, projectId: request.projectId, ...snap.data() });
-  }, (err) => console.warn('No se pudo cargar documento asignado:', err.message)), [request.projectId, request.docId]);
+  useEffect(() => {
+    if (!isOpen) return;
+    return onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId), snap => {
+      setDocu(snap.exists() ? { id: snap.id, projectId: request.projectId, ...snap.data() } : null);
+    }, () => setDocu(null));
+  }, [isOpen, request.projectId, request.docId]);
 
   async function downloadArtifact(type) {
     if (!docu) return;
@@ -1197,7 +1229,6 @@ function PendingDoc({ request, user, directOpen = false, onFocus, focusMode = fa
   }
 
   const statusLabel = signed ? 'Firmado por vos' : 'Pendiente de tu firma';
-  const isOpen = focusMode ? true : open;
 
   return <div className={`pendingBlock ${directOpen ? 'directTarget' : ''} ${focusMode ? 'focusMode' : ''}`} ref={blockRef}>
     {(!focusMode || signed) && <div className="pending">
@@ -1213,10 +1244,10 @@ function PendingDoc({ request, user, directOpen = false, onFocus, focusMode = fa
     {isOpen && (signed || !focusMode) && <Card className="signerStatusCard">
       <SignatureStatusPanel docu={docu || request} currentEmail={user.email}/>
       {signed && <div className="actions signerDownloads">
-        <Button variant="ghost" onClick={() => downloadArtifact('signed')} disabled={downloadBusy === 'signed'}>
+        <Button variant="ghost" onClick={() => downloadArtifact('signed')} disabled={!docu || Boolean(downloadBusy)}>
           <Download size={16}/>{downloadBusy === 'signed' ? 'Preparando...' : 'Descargar PDF firmado'}
         </Button>
-        <Button variant="ghost" onClick={() => downloadArtifact('certificate')} disabled={downloadBusy === 'certificate'}>
+        <Button variant="ghost" onClick={() => downloadArtifact('certificate')} disabled={!docu || Boolean(downloadBusy)}>
           <Download size={16}/>{downloadBusy === 'certificate' ? 'Preparando...' : 'Descargar certificado'}
         </Button>
       </div>}
@@ -1250,39 +1281,9 @@ function SignatureStatusPanel({ docu, currentEmail }) {
 
 
 
-function MobileSignRoute({ requestId, pending, user }) {
-  const [waited, setWaited] = useState(false);
-  useEffect(() => {
-    setWaited(false);
-    const t = setTimeout(() => setWaited(true), 1400);
-    return () => clearTimeout(t);
-  }, [requestId, user?.uid]);
-  const request = pending.find((item) => item.id === requestId);
-  if (!request && !waited) {
-    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>Buscando solicitud de firma...</p></Card></main>;
-  }
-  if (!request) {
-    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo correo que fue invitado a firmar.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
-  }
-  return <main className="mobileSignShell fullMobile"><MobileFullSigningRoom request={request} user={user}/></main>;
-}
-
-function MobileCaptureRoute({ requestId, sessionId, pending, user }) {
-  const [waited, setWaited] = useState(false);
-  useEffect(() => {
-    setWaited(false);
-    const t = setTimeout(() => setWaited(true), 1400);
-    return () => clearTimeout(t);
-  }, [requestId, sessionId, user?.uid]);
-  const request = pending.find((item) => item.id === requestId);
+function MobileCaptureRoute({ request, sessionId, user }) {
   if (!sessionId) {
     return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>Este QR no tiene una sesión de captura válida.</p></Card></main>;
-  }
-  if (!request && !waited) {
-    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>Buscando sesión de captura...</p></Card></main>;
-  }
-  if (!request) {
-    return <main className="mobileSignShell"><Card className="mobileSignCard"><ShieldCheck size={38}/><h1>GB Sign</h1><p>No encontramos esta solicitud para <strong>{normalizeEmail(user.email)}</strong>.</p><p className="muted">Verificá que hayas iniciado sesión con el mismo correo que está firmando en la computadora.</p><Button variant="ghost" onClick={() => signOut(auth)}><LogOut size={16}/> Cambiar cuenta</Button></Card></main>;
   }
   return <main className="mobileSignShell"><MobileSignatureCaptureOnly request={request} sessionId={sessionId} user={user}/></main>;
 }
@@ -1375,9 +1376,10 @@ function useSigningDocumentViewport(url) {
 
 function MobileFullSigningRoom({ request, user }) {
   const [docu, setDocu] = useState(null);
-  const [url, setUrl] = useState('');
-  const documentPanelRef = useSigningDocumentViewport(url);
   const [signed, setSigned] = useState(false);
+  const alreadySigned = signed || request.status === 'signed';
+  const { url, error: previewError } = usePrivateDocumentPreview(alreadySigned ? '' : request.storagePath);
+  const documentPanelRef = useSigningDocumentViewport(url);
   const [activeFieldId, setActiveFieldId] = useState('');
   const [fieldClicked, setFieldClicked] = useState(false);
   const [signatureMode, setSignatureMode] = useState('drawn');
@@ -1392,10 +1394,6 @@ function MobileFullSigningRoom({ request, user }) {
   const fields = (request.signatureFields || []).filter((f) => normalizeEmail(f.signerEmail) === normalizeEmail(user.email));
   const activeField = fields.find((f) => f.id === activeFieldId) || null;
   const cleanDni = normalizeDni(dni);
-
-  useEffect(() => {
-    getDownloadURL(ref(storage, request.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento mobile:', err.message));
-  }, [request.storagePath]);
 
   useEffect(() => onSnapshot(doc(db, 'projects', request.projectId, 'documents', request.docId), (snap) => {
     if (snap.exists()) setDocu({ id: snap.id, projectId: request.projectId, ...snap.data() });
@@ -1452,7 +1450,7 @@ function MobileFullSigningRoom({ request, user }) {
     } finally { setBusy(false); }
   }
 
-  if (signed) return <Card className="mobileSignCard success"><CheckCircle2 size={46}/><h1>Documento firmado</h1><p>Tu firma fue registrada correctamente.</p><small>{docu?.title || request.title || request.fileName}</small></Card>;
+  if (alreadySigned) return <PendingDoc request={{ ...request, status: 'signed' }} user={user} focusMode />;
 
   return <Card className="mobileSignCard mobileFullCard">
     <div className="mobileSignTop"><ShieldCheck size={34}/><div><h1>Revisar y firmar</h1><p>{docu?.title || request.title || request.fileName || 'Documento'}</p></div></div>
@@ -1460,7 +1458,7 @@ function MobileFullSigningRoom({ request, user }) {
       <section ref={documentPanelRef} className="signingDocument" aria-label="Documento a firmar">
         <div className="signingSectionHeading"><span className="eyebrow">Paso 1</span><h3>Revisá el documento</h3><p>Leé el contenido y seleccioná tu recuadro de firma.</p></div>
         <div className={`signStepNotice ${fieldClicked ? 'done' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : 'Paso 1: tocá el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ahora completá tu firma, DNI y consentimiento.' : 'Revisá el documento y tocá el campo de firma asignado a tu correo.'}</span></div>
-        {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
+        {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : previewError ? <p role="alert">{previewError}</p> : <p>Cargando documento...</p>}
       </section>
       <aside id="mobile-signature-controls" className="mobileControlStack signingDetails" aria-label="Datos del firmante y confirmación">
         <Card>
@@ -1485,7 +1483,7 @@ function MobileFullSigningRoom({ request, user }) {
 }
 
 function SigningRoom({ request, user, docu }) {
-  const [url, setUrl] = useState('');
+  const { url, error: previewError } = usePrivateDocumentPreview(request.storagePath);
   const documentPanelRef = useSigningDocumentViewport(url);
   const [activeFieldId, setActiveFieldId] = useState('');
   const [fieldClicked, setFieldClicked] = useState(false);
@@ -1503,10 +1501,6 @@ function SigningRoom({ request, user, docu }) {
   const cleanDni = normalizeDni(dni);
   const captureSessionId = useMemo(() => `capture_${request.id}_${user.uid}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`, [request.id, user.uid]);
   const mobileLink = mobileCaptureLink(request.id, captureSessionId);
-
-  useEffect(() => {
-    getDownloadURL(ref(storage, request.storagePath)).then(setUrl).catch((err) => console.warn('No se pudo abrir el documento:', err.message));
-  }, [request.storagePath]);
 
   useEffect(() => {
     if (!captureSessionId) return;
@@ -1600,7 +1594,7 @@ function SigningRoom({ request, user, docu }) {
       <section ref={documentPanelRef} className="signingDocument" aria-label="Documento a firmar">
         <div className="signingSectionHeading"><span className="eyebrow">Paso 1</span><h3>Revisá el documento</h3><p>Leé el contenido y seleccioná tu recuadro de firma.</p></div>
         <div className={`signStepNotice ${stepDone ? 'done' : hasSignatureDraft ? 'attention' : ''}`}><strong>{fieldClicked ? 'Recuadro seleccionado' : hasSignatureDraft ? 'Firma lista: falta seleccionar el recuadro' : 'Paso obligatorio: presioná el recuadro de firma marcado'}</strong><span>{fieldClicked ? 'Ya podés completar tu DNI y confirmar la firma.' : hasSignatureDraft ? 'La firma ya quedó cargada. Ahora seleccioná el recuadro asignado dentro del documento para vincularla.' : 'Para dejar constancia de intención, seleccioná tu recuadro dentro del documento antes de avanzar.'}</span></div>
-        {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : <p>Cargando documento...</p>}
+        {url ? <DocumentPreview url={url} fileName={request.fileName} contentType={request.contentType} fields={fields} activeFieldId={activeFieldId} onSelectField={selectSignatureField} signatures={buildPreviewSignatures(fieldClicked ? activeField : null, signatureMode, signatureImage, typedName)}/> : previewError ? <p role="alert">{previewError}</p> : <p>Cargando documento...</p>}
         <div className="signingFieldStatus">
             {fields.length ? <div className="chips">{fields.map((f, idx) => <span className={`chip chipButton ${fieldClicked && f.id === activeFieldId ? 'active' : ''}`} key={f.id}>Campo {idx + 1} · {fieldClicked && f.id === activeFieldId ? 'seleccionado' : 'tocá el recuadro en el documento'}</span>)}</div> : <p className="muted">No hay un recuadro asignado a tu mail. Pedile al administrador que configure el campo de firma.</p>}
         </div>
